@@ -1,0 +1,14 @@
+import go
+
+install(
+  "protobuf",
+  go,
+  go.build_module("github.com/golang/protobuf/protoc-gen-go", "78b1f09"),
+  go.build_module("github.com/vektra/mockery/cmd/mockery", "v1.1.2"),
+)
+
+if platform.os == "darwin" {
+  install(
+    homebrew("jq"),
+  )
+}
