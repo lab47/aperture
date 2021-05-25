@@ -9,7 +9,7 @@ import (
 )
 
 type PackageReadInfo struct {
-	storeDir string
+	StoreDir string
 }
 
 func (p *PackageReadInfo) Read(pkg *ScriptPackage) (*data.PackageInfo, error) {
@@ -17,7 +17,7 @@ func (p *PackageReadInfo) Read(pkg *ScriptPackage) (*data.PackageInfo, error) {
 		return pkg.PackageInfo, nil
 	}
 
-	path := filepath.Join(p.storeDir, pkg.ID(), ".pkg-info.json")
+	path := filepath.Join(p.StoreDir, pkg.ID(), ".pkg-info.json")
 
 	f, err := os.Open(path)
 	if err != nil {

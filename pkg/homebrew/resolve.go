@@ -37,6 +37,7 @@ func NewResolver(cellar, path string) (*Resolver, error) {
 type ResolvedPackage struct {
 	Package
 
+	Installed        bool
 	IncludedBy       []*ResolvedPackage
 	IncludedByNames  []string
 	DepedentPackages []*ResolvedPackage
@@ -45,6 +46,20 @@ type ResolvedPackage struct {
 type Resolution struct {
 	Cellar    string
 	ToInstall []*ResolvedPackage
+}
+
+func (r *Resolution) PruneInstalled() {
+	var ti []*ResolvedPackage
+
+	for _, pkg := range r.ToInstall {
+		if pkg.Installed {
+			continue
+		}
+
+		ti = append(ti, pkg)
+	}
+
+	r.ToInstall = ti
 }
 
 func (r *Resolver) Add(name string) error {
@@ -87,6 +102,9 @@ func (r *Resolver) loadPackage(
 
 	seen[name] = &pkg
 	usage[name] = 0
+
+	_, err = os.Stat(filepath.Join(r.cellar, pkg.Name, pkg.Version))
+	pkg.Installed = err == nil
 
 	for _, dep := range pkg.Dependencies {
 		dp, ok := seen[dep]
@@ -230,7 +248,7 @@ func DefaultCellar() string {
 	}
 }
 
-func (r *Resolution) findBinary(pkg *ResolvedPackage) (*Binary, error) {
+func findBinary(cellar string, pkg *ResolvedPackage) (*Binary, error) {
 	for _, bin := range pkg.Binaries {
 		spew.Dump(bin)
 
@@ -247,7 +265,7 @@ func (r *Resolution) findBinary(pkg *ResolvedPackage) (*Binary, error) {
 				return bin, nil
 			}
 
-			if bin.Options.InstallPath != "" && bin.Options.InstallPath != r.Cellar {
+			if bin.Options.InstallPath != "" && bin.Options.InstallPath != cellar {
 				continue
 			}
 
@@ -268,7 +286,7 @@ func (r *Resolution) ComputeURLs() ([]PackageURL, error) {
 	var urls []PackageURL
 
 	for _, pkg := range r.ToInstall {
-		bin, err := r.findBinary(pkg)
+		bin, err := findBinary(r.Cellar, pkg)
 		if err != nil {
 			return nil, err
 		}

@@ -235,7 +235,7 @@ func (s *ScriptLoad) Load(name string, opts ...Option) (*ScriptPackage, error) {
 		if !ok {
 			return nil, fmt.Errorf("unknown namespace: %s", lc.namespace)
 		}
-	} else if cr == nil {
+	} else if cr == nil && s.cfg != nil {
 		cr, _ = s.cfg.Repos["root"]
 	}
 

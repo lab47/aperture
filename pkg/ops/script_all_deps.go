@@ -8,7 +8,7 @@ func (i *ScriptCalcDeps) pkgRuntimeDeps(pkg *ScriptPackage) ([]*ScriptPackage, e
 	runtimeDeps := pkg.Dependencies()
 
 	var pri PackageReadInfo
-	pri.storeDir = i.storeDir
+	pri.StoreDir = i.storeDir
 
 	pi, err := pri.Read(pkg)
 	if err != nil {
@@ -42,28 +42,69 @@ func (i *ScriptCalcDeps) RuntimeDeps(pkg *ScriptPackage) ([]*ScriptPackage, erro
 }
 
 func (i *ScriptCalcDeps) EvalDeps(pkgs []*ScriptPackage) ([]*ScriptPackage, error) {
-	seen := make(map[string]struct{})
+	seen := make(map[string]*ScriptPackage)
+	usage := make(map[string]int)
+	deps := make(map[string][]*ScriptPackage)
+
+	// fully build seen and usage
+
+	for _, pkg := range pkgs {
+		seen[pkg.ID()] = pkg
+		usage[pkg.ID()] = 0
+	}
+
+	for len(pkgs) > 0 {
+		pkg := pkgs[0]
+		pkgs = pkgs[1:]
+
+		rd, err := i.pkgRuntimeDeps(pkg)
+		if err != nil {
+			return nil, err
+		}
+
+		deps[pkg.ID()] = rd
+
+		for _, dep := range rd {
+			if _, ok := seen[dep.ID()]; !ok {
+				seen[dep.ID()] = dep
+				pkgs = append(pkgs, dep)
+			}
+
+			usage[dep.ID()]++
+		}
+	}
+
+	var toCheck []string
+
+	for name, count := range usage {
+		if count == 0 {
+			toCheck = append(toCheck, name)
+		}
+	}
 
 	var output []*ScriptPackage
 
-	for _, pkg := range pkgs {
-		if _, ok := seen[pkg.ID()]; ok {
-			continue
-		}
+	for len(toCheck) > 0 {
+		x := toCheck[len(toCheck)-1]
+		toCheck = toCheck[:len(toCheck)-1]
+
+		pkg := seen[x]
 
 		output = append(output, pkg)
 
-		direct, err := i.pkgRuntimeDeps(pkg)
-		if err != nil {
-			return nil, err
-		}
+		for _, dep := range deps[pkg.ID()] {
+			deg := usage[dep.ID()] - 1
+			usage[dep.ID()] = deg
 
-		out, err := i.walkFromDeps(direct, seen)
-		if err != nil {
-			return nil, err
+			if deg == 0 {
+				toCheck = append(toCheck, dep.ID())
+			}
 		}
+	}
 
-		output = append(output, out...)
+	for i := len(output)/2 - 1; i >= 0; i-- {
+		opp := len(output) - 1 - i
+		output[i], output[opp] = output[opp], output[i]
 	}
 
 	return output, nil
@@ -75,7 +116,6 @@ func (i *ScriptCalcDeps) BuildDeps(pkg *ScriptPackage) ([]*ScriptPackage, error)
 }
 
 func (i *ScriptCalcDeps) walkFromDeps(deps []*ScriptPackage, seen map[string]struct{}) ([]*ScriptPackage, error) {
-
 	var output []*ScriptPackage
 
 	for len(deps) > 0 {

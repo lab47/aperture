@@ -38,12 +38,12 @@ func (p *PackageWriteInfo) Write(pkg *ScriptPackage) (*data.PackageInfo, error) 
 		return nil, errors.Wrapf(err, "unable to prune deps")
 	}
 
-	var depIds []string
+	depIds := []string{}
 	for _, dep := range runtimeDeps {
 		depIds = append(depIds, dep.ID())
 	}
 
-	var buildDeps []string
+	buildDeps := []string{}
 	for _, dep := range allDeps {
 		buildDeps = append(buildDeps, dep.ID())
 	}

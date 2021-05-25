@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -10,14 +9,13 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/mitchellh/go-homedir"
 	"github.com/mr-tron/base58"
+	"github.com/shirou/gopsutil/v3/host"
 	"lab47.dev/aperture/pkg/metadata"
 	"lab47.dev/aperture/pkg/repo"
 )
@@ -46,15 +44,15 @@ type Config struct {
 }
 
 const (
-	DefaultConfigPath   = "~/.config/chell/config.json"
-	DefaultProfilesPath = "~/.config/chell/profiles"
+	DefaultConfigPath   = "~/.config/iris/config.json"
+	DefaultProfilesPath = "~/.config/iris/profiles"
 	DefaultProfile      = "main"
-	DefaultDataDir      = "/usr/local/chell/main"
-	DefaultChellPath    = "./"
+	DefaultDataDir      = "/opt/iris"
+	DefaultPath         = "github.com/lab47/aperture-packages"
 )
 
 func LoadConfig() (*Config, error) {
-	if loc := os.Getenv("CHELL_CONFIG"); loc != "" {
+	if loc := os.Getenv("APERTURE_CONFIG"); loc != "" {
 		return loadFile(loc)
 	}
 
@@ -84,7 +82,7 @@ func LoadConfig() (*Config, error) {
 		configDir: dir,
 
 		DataDir:      DefaultDataDir,
-		Path:         DefaultChellPath,
+		Path:         DefaultPath,
 		ProfilesPath: ppath,
 		Profile:      DefaultProfile,
 	}
@@ -113,7 +111,7 @@ func loadFile(path string) (*Config, error) {
 	}
 
 	if cfg.Path == "" {
-		cfg.Path = DefaultChellPath
+		cfg.Path = DefaultPath
 	}
 
 	if cfg.ProfilesPath == "" {
@@ -133,7 +131,7 @@ func loadFile(path string) (*Config, error) {
 }
 
 func updateFromEnv(cfg *Config) (*Config, error) {
-	if path := os.Getenv("CHELL_DATA_DIR"); path != "" && path != DefaultChellPath {
+	if path := os.Getenv("APERTURE_DATA_DIR"); path != "" && path != DefaultPath {
 		fi, err := os.Stat(path)
 		if err != nil {
 			return nil, err
@@ -146,15 +144,15 @@ func updateFromEnv(cfg *Config) (*Config, error) {
 		cfg.DataDir = path
 	}
 
-	if path := os.Getenv("CHELL_PATH"); path != "" {
+	if path := os.Getenv("APERTURE_PATH"); path != "" {
 		cfg.Path = path
 	}
 
-	if path := os.Getenv("CHELL_PROFILES"); path != "" {
+	if path := os.Getenv("APERTURE_PROFILES"); path != "" {
 		cfg.ProfilesPath = path
 	}
 
-	if name := os.Getenv("CHELL_PROFILE"); name != "" {
+	if name := os.Getenv("APERTURE_PROFILE"); name != "" {
 		cfg.Profile = name
 	}
 
@@ -290,12 +288,16 @@ func (c *Config) RootsPath() string {
 	return filepath.Join(c.DataDir, "roots")
 }
 
+func (c *Config) GlobalProfilePath() string {
+	return filepath.Join(c.ProfilesPath, c.Profile)
+}
+
 type PathPart struct {
 	Name string
 	Path string
 }
 
-func (c *Config) ChellPath() []PathPart {
+func (c *Config) NamedPath() []PathPart {
 	var pp []PathPart
 
 	for _, c := range strings.Split(c.Path, ":") {
@@ -337,7 +339,7 @@ type ConfigRepo struct {
 }
 
 func (c *ConfigRepo) Lookup(name string) (repo.Entry, error) {
-	for _, part := range c.c.ChellPath() {
+	for _, part := range c.c.NamedPath() {
 		r, err := repo.Open(part.Path)
 		if err != nil {
 			return nil, err
@@ -359,7 +361,7 @@ func (c *ConfigRepo) Lookup(name string) (repo.Entry, error) {
 }
 
 func (c *ConfigRepo) Config() (*metadata.RepoConfig, error) {
-	for _, part := range c.c.ChellPath() {
+	for _, part := range c.c.NamedPath() {
 		r, err := repo.Open(part.Path)
 		if err != nil {
 			return nil, err
@@ -372,56 +374,43 @@ func (c *ConfigRepo) Config() (*metadata.RepoConfig, error) {
 }
 
 func (c *Config) Constraints() map[string]string {
-	constraints := make(map[string]string)
-
-	arch := runtime.GOARCH
-
-	if s := os.Getenv("CHELL_ARCH"); s != "" {
-		arch = s
-	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		// TODO(evanphx) When/if chell supports packaging /Library into a car, this can
-		// be dynamic, basically if the config is supposed to be "pure" or not.
-		ver, err := exec.Command("sw_vers", "-productVersion").Output()
-		if err == nil {
-			dot := bytes.LastIndexByte(ver, '.')
-			if dot != -1 {
-				constraints["darwin/version"] = string(ver[:dot])
-			}
-		}
-	}
-
-	constraints["chell/arch"] = arch
-	constraints["chell/root"] = c.DataDir
+	constraints := SystemConstraints()
+	constraints["aperture/root"] = c.DataDir
 
 	return constraints
 }
 
+func Platform() (string, string, string) {
+	osName, _, osVersion, err := host.PlatformInformation()
+	if err != nil {
+		panic(err)
+	}
+
+	arch, err := host.KernelArch()
+	if err != nil {
+		panic(err)
+	}
+
+	return osName, osVersion, arch
+}
+
 func SystemConstraints() map[string]string {
-	constraints := make(map[string]string)
+	osName, osVersion, arch := Platform()
 
-	arch := runtime.GOARCH
-
-	if s := os.Getenv("CHELL_ARCH"); s != "" {
-		arch = s
+	constraints := map[string]string{
+		"machine/arch": arch,
+		"os/name":      osName,
 	}
 
-	switch runtime.GOOS {
-	case "darwin":
-		// TODO(evanphx) When/if chell supports packaging /Library into a car, this can
-		// be dynamic, basically if the config is supposed to be "pure" or not.
-		ver, err := exec.Command("sw_vers", "-productVersion").Output()
-		if err == nil {
-			dot := bytes.LastIndexByte(ver, '.')
-			if dot != -1 {
-				constraints["darwin/version"] = string(ver[:dot])
-			}
+	if osName == "darwin" {
+		// Strip off the minor version
+		dot := strings.LastIndexByte(osVersion, '.')
+		if dot != -1 {
+			osVersion = osVersion[:dot]
 		}
-	}
 
-	constraints["chell/arch"] = arch
+		constraints["darwin/version"] = osVersion
+	}
 
 	return constraints
 }

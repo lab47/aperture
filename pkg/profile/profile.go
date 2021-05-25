@@ -2,13 +2,20 @@ package profile
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
+type profileChange struct {
+	id, path string
+}
+
 type Profile struct {
 	path string
+
+	changes []profileChange
 }
 
 func OpenProfile(path string) (*Profile, error) {
@@ -22,10 +29,15 @@ func OpenProfile(path string) (*Profile, error) {
 		return nil, err
 	}
 
-	return &Profile{path}, nil
+	return &Profile{path: path}, nil
 }
 
 func (p *Profile) Link(id string, root string) error {
+	p.changes = append(p.changes, profileChange{id: id, path: root})
+	return nil
+}
+
+func (p *Profile) linkOne(id string, root string) error {
 	refs := filepath.Join(p.path, ".refs")
 
 	if tgt, err := os.Readlink(filepath.Join(refs, id)); err == nil {
@@ -49,6 +61,45 @@ func (p *Profile) Link(id string, root string) error {
 	os.Remove(tgt)
 
 	return os.Symlink(root, tgt)
+}
+
+func (p *Profile) Commit() error {
+	known := map[string]struct{}{}
+
+	files, _ := ioutil.ReadDir(filepath.Join(p.path, ".refs"))
+
+	var refs []string
+
+	for _, fi := range files {
+		known[fi.Name()] = struct{}{}
+		refs = append(refs, fi.Name())
+	}
+
+	for _, ch := range p.changes {
+		delete(known, ch.id)
+	}
+
+	// If we deleted something, nuke the profile dir and we'll rebuild it now
+	if len(known) > 0 {
+		err := os.RemoveAll(p.path)
+		if err != nil {
+			return err
+		}
+
+		err = os.MkdirAll(filepath.Join(p.path, ".refs"), 0755)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, ch := range p.changes {
+		err := p.linkOne(ch.id, ch.path)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (p *Profile) UpdateEnv(env []string) []string {

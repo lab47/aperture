@@ -14,6 +14,7 @@ import (
 	"github.com/mitchellh/cli"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
+	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/direnv"
 	"lab47.dev/aperture/pkg/ops"
 	"lab47.dev/aperture/pkg/profile"
@@ -34,6 +35,15 @@ func main() {
 		},
 		"xinstall": func() (cli.Command, error) {
 			return &xinstall{}, nil
+		},
+		"inspect-car": func() (cli.Command, error) {
+			return &inspectCar{}, nil
+		},
+		"publish-car": func() (cli.Command, error) {
+			return &publishCar{}, nil
+		},
+		"env": func() (cli.Command, error) {
+			return &env{}, nil
 		},
 	}
 
@@ -168,6 +178,11 @@ func (i *xinstall) Run(args []string) int {
 		log.Fatal(err)
 	}
 
+	err = prof.Commit()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	updates := prof.UpdateEnv(os.Environ())
 
 	for _, u := range updates {
@@ -179,6 +194,9 @@ func (i *xinstall) Run(args []string) int {
 
 type install struct {
 	fExplain bool
+	fExport  string
+	fPublish bool
+	fGlobal  bool
 }
 
 func (i *install) Help() string {
@@ -195,13 +213,27 @@ func (i *install) Run(args []string) int {
 	fs.BoolVarP(&i.fExplain, "explain", "E", false,
 		"Explain what will be installed")
 
+	fs.StringVar(&i.fExport, "export", "",
+		"write .car files to this directory")
+
+	fs.BoolVar(&i.fPublish, "publish", false,
+		"publish the exported .car files to the repo's publish address")
+
+	fs.BoolVar(&i.fGlobal, "global-profile", false,
+		"install into the user's global profile")
+
 	err := fs.Parse(args)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err)
 		return 1
 	}
 
-	storeDir := "/opt/iris/store"
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	storeDir := cfg.StorePath()
 	buildRoot := filepath.Join(storeDir, "_build")
 
 	err = os.MkdirAll(buildRoot, 0755)
@@ -216,7 +248,7 @@ func (i *install) Run(args []string) int {
 
 	var cl ops.ProjectLoad
 
-	proj, err := cl.Load()
+	proj, err := cl.Load(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -237,7 +269,31 @@ func (i *install) Run(args []string) int {
 		log.Fatal(err)
 	}
 
-	prof, err := profile.OpenProfile(".iris-profile")
+	if i.fExport != "" {
+		err := os.MkdirAll(i.fExport, 0755)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		cars, err := proj.Export(ctx, cfg, i.fExport)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if i.fPublish {
+			return publishCars(cars)
+		}
+
+		return 0
+	}
+
+	profilePath := ".iris-profile"
+
+	if i.fGlobal {
+		profilePath = cfg.GlobalProfilePath()
+	}
+
+	prof, err := profile.OpenProfile(profilePath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -249,10 +305,28 @@ func (i *install) Run(args []string) int {
 		}
 	}
 
+	err = prof.Commit()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	updates := prof.UpdateEnv(os.Environ())
 
 	for _, u := range updates {
 		fmt.Println(u)
+	}
+
+	return 0
+}
+
+func publishCars(cars []*ops.ExportedCar) int {
+	for _, car := range cars {
+		var cp ops.CarPublish
+
+		err := cp.PublishCar(car.Path, "ghcr.io/lab47")
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	return 0
@@ -271,10 +345,15 @@ func (i *shell) Synopsis() string {
 }
 
 func (i *shell) Run(args []string) int {
-	storeDir := "/opt/iris/store"
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	storeDir := cfg.StorePath()
 	buildRoot := filepath.Join(storeDir, "_build")
 
-	err := os.MkdirAll(buildRoot, 0755)
+	err = os.MkdirAll(buildRoot, 0755)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -286,7 +365,7 @@ func (i *shell) Run(args []string) int {
 
 	var cl ops.ProjectLoad
 
-	proj, err := cl.Load()
+	proj, err := cl.Load(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -308,6 +387,11 @@ func (i *shell) Run(args []string) int {
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	err = prof.Commit()
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	if i.dump {
@@ -345,54 +429,100 @@ func (i *shell) Run(args []string) int {
 	return 0
 }
 
-/*
-func hbmain() {
-	cellar := homebrew.DefaultCellar()
-	err := os.MkdirAll(cellar, 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
+type inspectCar struct{}
 
-	r, err := homebrew.NewResolver(cellar, "./gen/packages")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var d homebrew.Downloader
-
-	res, err := r.Resolve("zsh-autosuggestions")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	res.Explain(os.Stdout, &d)
-
-	urls, err := res.ComputeURLs()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	info, err := d.Stage("./tmp-data", urls)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	u, err := homebrew.NewUnpacker(cellar)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for i, pkg := range res.ToInstall {
-		fmt.Println(pkg.Name)
-
-		url := urls[i]
-
-		err := u.Unpack(pkg, url.Binary, info[url.URL])
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	// spew.Dump(info)
+func (i *inspectCar) Help() string {
+	return "inspect the contents of a car file"
 }
-*/
+
+func (i *inspectCar) Synopsis() string {
+	return "inspect the contents of a car file"
+}
+
+func (i *inspectCar) Run(args []string) int {
+	fs := pflag.NewFlagSet("inspect-car", pflag.ExitOnError)
+
+	err := fs.Parse(args)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return 1
+	}
+
+	f, err := os.Open(fs.Arg(0))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer f.Close()
+
+	var ci ops.CarInspect
+
+	tw := tabwriter.NewWriter(os.Stdout, 4, 2, 1, ' ', 0)
+	defer tw.Flush()
+
+	ci.Show(f, tw)
+
+	return 0
+}
+
+type publishCar struct{}
+
+func (i *publishCar) Help() string {
+	return "inspect the contents of a car file"
+}
+
+func (i *publishCar) Synopsis() string {
+	return "inspect the contents of a car file"
+}
+
+func (i *publishCar) Run(args []string) int {
+	fs := pflag.NewFlagSet("inspect-car", pflag.ExitOnError)
+
+	err := fs.Parse(args)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return 1
+	}
+
+	var cp ops.CarPublish
+
+	err = cp.PublishCar(fs.Arg(0), "ghcr.io/lab47")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return 0
+}
+
+type env struct{}
+
+func (i *env) Help() string {
+	return "provide environment information"
+}
+
+func (i *env) Synopsis() string {
+	return "provide environment information"
+}
+
+func (i *env) Run(args []string) int {
+	fs := pflag.NewFlagSet("env", pflag.ExitOnError)
+
+	gp := fs.BoolP("global-profile", "G", false, "output location of global-profile")
+
+	err := fs.Parse(args)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return 1
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *gp {
+		fmt.Println(cfg.GlobalProfilePath())
+	}
+
+	return 0
+}

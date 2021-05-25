@@ -2,8 +2,8 @@ package ops
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +13,7 @@ import (
 	"github.com/lab47/exprcore/exprcore"
 	"github.com/mitchellh/go-homedir"
 	"lab47.dev/aperture/pkg/config"
+	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/homebrew"
 )
 
@@ -33,9 +34,14 @@ type Installable interface {
 }
 
 type ProjectLoad struct {
+	lockFile *data.LockFile
+	path     []string
+
 	constraints map[string]string
 
-	cfg Config
+	// cfg Config
+	// cfg *config.Config
+	storeDir string
 
 	toInstall []*ScriptPackage
 
@@ -43,9 +49,10 @@ type ProjectLoad struct {
 }
 
 type Project struct {
-	Cellar    string
-	Install   []*ScriptPackage
-	Requested []string
+	Constraints map[string]string
+	Cellar      string
+	Install     []*ScriptPackage
+	Requested   []string
 
 	homebrewPackages []string
 }
@@ -76,7 +83,38 @@ func (p *platform) AttrNames() []string {
 	return []string{"os", "arch"}
 }
 
-func (c *ProjectLoad) Load() (*Project, error) {
+func (c *ProjectLoad) Load(cfg *config.Config) (*Project, error) {
+	c.storeDir = cfg.StorePath()
+
+	var lf data.LockFile
+	f, err := os.Open("aperture-lock.json")
+	if err == nil {
+		err = json.NewDecoder(f).Decode(&lf)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		lf = data.LockFile{
+			&data.LockFileEntry{
+				Name: "aperture",
+				Path: "github.com/lab47/aperture-packages",
+			},
+		}
+	}
+
+	for _, ent := range lf {
+		if len(ent.Path) >= 2 && ent.Path[0] == '~' {
+			dir, err := homedir.Expand(ent.Path)
+			if err != nil {
+				return nil, err
+			}
+
+			ent.Path = dir
+		}
+
+		c.path = append(c.path, ent.Path)
+	}
+
 	c.constraints = config.SystemConstraints()
 
 	vars := exprcore.StringDict{
@@ -100,49 +138,12 @@ func (c *ProjectLoad) Load() (*Project, error) {
 	}
 
 	var proj Project
+	proj.Constraints = c.constraints
 	proj.Cellar = homebrew.DefaultCellar()
 	proj.Install = c.toInstall
 	proj.homebrewPackages = c.homebrewPackages
 
 	return &proj, nil
-}
-
-type ScriptInstaller struct {
-	*ScriptPackage
-}
-
-func (i *ScriptInstaller) Install(tmpdir string) error {
-	var pci PackageCalcInstall
-	pci.StoreDir = "/opt/iris/store"
-
-	toInstall, err := pci.Calculate(i.ScriptPackage)
-	if err != nil {
-		return err
-	}
-
-	buildDir, err := ioutil.TempDir(tmpdir, "build-"+i.id)
-	if err != nil {
-		return err
-	}
-
-	ienv := &InstallEnv{
-		BuildDir: buildDir,
-		StoreDir: tmpdir,
-	}
-
-	err = os.MkdirAll(ienv.StoreDir, 0755)
-	if err != nil {
-		return err
-	}
-
-	var pkgInst PackagesInstall
-
-	err = pkgInst.Install(context.TODO(), ienv, toInstall)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (l *ProjectLoad) installFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple, kwargs []exprcore.Tuple) (exprcore.Value, error) {
@@ -196,19 +197,14 @@ func (l *LoadedPackage) Hash() (uint32, error) {
 }
 
 func (l *ProjectLoad) loadScript(name string) (*ScriptPackage, error) {
-	dir, err := homedir.Expand("~/.config/iris/packages")
-	if err != nil {
-		return nil, err
-	}
-
-	cr := &ConfigRepo{
-		Path: dir,
-	}
-
 	var sl ScriptLoad
-	sl.lookup = &ScriptLookup{}
+	sl.lookup = &ScriptLookup{
+		Path: l.path,
+	}
 
-	data, err := sl.Load(name, WithConfigRepo(cr))
+	sl.StoreDir = l.storeDir
+
+	data, err := sl.Load(name, WithConstraints(l.constraints))
 	if err != nil {
 		return nil, err
 	}
@@ -258,24 +254,7 @@ func (s *ProjectLoad) importPkg(thread *exprcore.Thread, ns, name string, args *
 		return &LoadedPackage{name: name}, nil
 	}
 
-	dir, err := homedir.Expand("~/.config/iris/packages")
-	if err != nil {
-		return nil, err
-	}
-
-	cr := &ConfigRepo{
-		Path: dir,
-	}
-
-	var sl ScriptLoad
-	sl.lookup = &ScriptLookup{}
-
-	data, err := sl.Load(name, WithConfigRepo(cr))
-	if err != nil {
-		return nil, err
-	}
-
-	return data, nil
+	return s.loadScript(name)
 }
 
 func (p *Project) Resolve() (*homebrew.Resolution, error) {
@@ -347,6 +326,21 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", script.Name(), script.Version(), flag, deps)
 	}
 
+	res, err := p.Resolve()
+	if err != nil {
+		return err
+	}
+
+	for _, pkg := range res.ToInstall {
+		flag := " "
+		if pkg.Installed {
+			flag = "I"
+		}
+
+		ib := strings.Join(pkg.IncludedByNames, ", ")
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", pkg.Name, pkg.Version, flag, ib)
+	}
+
 	return nil
 }
 
@@ -384,6 +378,23 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 		return nil, nil, err
 	}
 
+	add := map[string]struct{}{}
+
+	for _, name := range p.homebrewPackages {
+		add[name] = struct{}{}
+	}
+
+	for _, rp := range res.ToInstall {
+		_, ok := add[rp.Name]
+		if ok && rp.Installed {
+			requested = append(requested, rp.Name)
+			toInstall.InstallDirs[rp.Name] =
+				filepath.Join(p.Cellar, rp.Name, rp.Version)
+		}
+	}
+
+	res.PruneInstalled()
+
 	urls, err := res.ComputeURLs()
 	if err != nil {
 		return nil, nil, err
@@ -409,11 +420,103 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 			return nil, nil, err
 		}
 
-		requested = append(requested, rp.Name)
-		toInstall.InstallDirs[rp.Name] = pkgPath
+		if _, ok := add[rp.Name]; ok {
+			requested = append(requested, rp.Name)
+			toInstall.InstallDirs[rp.Name] = pkgPath
+		}
 	}
 
 	return requested, toInstall, nil
+}
+
+type ExportedCar struct {
+	Package *ScriptPackage
+	Info    *data.CarInfo
+	Path    string
+	Sum     []byte
+}
+
+func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) ([]*ExportedCar, error) {
+	var pri PackageReadInfo
+	pri.StoreDir = "/opt/iris/store"
+
+	var scd ScriptCalcDeps
+	scd.storeDir = pri.StoreDir
+
+	infos := map[string]*data.CarDependency{}
+
+	pkgs, err := scd.EvalDeps(p.Install)
+	if err != nil {
+		return nil, err
+	}
+
+	var export []*ExportedCar
+
+	for _, pkg := range pkgs {
+		pi, err := pri.Read(pkg)
+		if err != nil {
+			return nil, err
+		}
+
+		var deps []*data.CarDependency
+
+		for _, d := range pi.RuntimeDeps {
+			cd, ok := infos[d]
+			if !ok {
+				return nil, fmt.Errorf("missing dependency: %s", d)
+			}
+
+			deps = append(deps, cd)
+		}
+
+		osName, osVer, arch := config.Platform()
+
+		infos[pkg.ID()] = &data.CarDependency{
+			ID: pkg.ID(),
+		}
+
+		ci := &data.CarInfo{
+			ID:           pkg.ID(),
+			Name:         pkg.Name(),
+			Version:      pkg.Version(),
+			Repo:         pkg.Repo(),
+			Constraints:  p.Constraints,
+			Dependencies: deps,
+			Platform: &data.CarPlatform{
+				OS:        osName,
+				OSVersion: osVer,
+				Arch:      arch,
+			},
+		}
+
+		carPath := filepath.Join(dest, pkg.ID()+".car")
+
+		f, err := os.Create(carPath)
+		if err != nil {
+			return nil, err
+		}
+
+		defer f.Close()
+
+		var cp CarPack
+		cp.PrivateKey = cfg.Private()
+		cp.PublicKey = cfg.Public()
+
+		path := filepath.Join(pri.StoreDir, pkg.ID())
+		err = cp.Pack(ci, path, f)
+		if err != nil {
+			return nil, err
+		}
+
+		export = append(export, &ExportedCar{
+			Package: pkg,
+			Info:    ci,
+			Path:    carPath,
+			Sum:     cp.Sum,
+		})
+	}
+
+	return nil, nil
 }
 
 func (p *Project) installPackagesHB(ctx context.Context, tmpdir string) error {

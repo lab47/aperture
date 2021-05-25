@@ -43,6 +43,8 @@ type Package struct {
 	Checksum     *Checksum `json:"checksum"`
 	Dependencies []string  `json:"dependencies"`
 	Binaries     []*Binary `json:"binaries"`
+
+	Path string
 }
 
 func (c *Checksum) Matches(h hash.Hash) bool {

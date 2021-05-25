@@ -18,25 +18,38 @@ type HomebrewRelocator struct {
 
 const ReceiptJson = "INSTALL_RECEIPT.json"
 
-func (h *HomebrewRelocator) Relocate(root string) error {
+func (h *HomebrewRelocator) Relocate(pkg *ResolvedPackage, root string) error {
 	path := filepath.Join(root, ReceiptJson)
+
+	var changedFiles []string
 
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			tab, err := FetchTab(h.Cellar, pkg)
+			if err != nil {
+				return err
+			}
+
+			if tab == nil {
+				return nil
+			}
+
+			changedFiles = tab.ChangedFiles
+		} else {
+			return err
+		}
+	} else {
+		defer f.Close()
+
+		var rec InstallReceipt
+
+		err = json.NewDecoder(f).Decode(&rec)
+		if err != nil {
+			return err
 		}
 
-		return err
-	}
-
-	defer f.Close()
-
-	var rec InstallReceipt
-
-	err = json.NewDecoder(f).Decode(&rec)
-	if err != nil {
-		return err
+		changedFiles = rec.ChangedFiles
 	}
 
 	repo := filepath.Dir(h.Cellar)
@@ -48,7 +61,7 @@ func (h *HomebrewRelocator) Relocate(root string) error {
 		"@@HOMEBREW_LIBRARY@@", filepath.Join(repo, "Library"),
 	)
 
-	for _, file := range rec.ChangedFiles {
+	for _, file := range changedFiles {
 		fpath := filepath.Join(root, file)
 
 		fi, err := os.Stat(fpath)

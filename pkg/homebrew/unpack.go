@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"debug/macho"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -63,8 +62,6 @@ func (u *Unpacker) Unpack(pkg *ResolvedPackage, bin *Binary, path string) (strin
 
 		tgt := filepath.Join(u.root, hdr.Name)
 
-		fmt.Printf("| %s\n", tgt)
-
 		fi := hdr.FileInfo()
 
 		if fi.IsDir() {
@@ -122,7 +119,7 @@ func (u *Unpacker) Unpack(pkg *ResolvedPackage, bin *Binary, path string) (strin
 		Cellar: u.root,
 	}
 
-	err = hr.Relocate(pkgPath)
+	err = hr.Relocate(pkg, pkgPath)
 	if err != nil {
 		return "", err
 	}
@@ -225,7 +222,7 @@ func (u *Unpacker) relocate(tgt string) error {
 	defer f.Close()
 
 	// We handle all the other types
-	if !(f.Type == macho.TypeExec || f.Type == macho.TypeDylib) {
+	if f.Type == macho.TypeObj {
 		return nil
 	}
 
