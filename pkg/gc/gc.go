@@ -9,7 +9,9 @@ import (
 	"sort"
 	"strings"
 
+	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
+	"lab47.dev/aperture/pkg/ops"
 )
 
 type Collector struct {
@@ -82,6 +84,23 @@ func (c *Collector) markInUse() (map[string]struct{}, error) {
 	}
 
 	return seen, nil
+}
+
+func (c *Collector) MarkMinimal(cfg *config.Config) ([]string, error) {
+	var ss ops.StoreScan
+
+	pkgs, err := ss.Scan(cfg, true)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []string
+
+	for _, pkg := range pkgs {
+		out = append(out, pkg.Info.Id)
+	}
+
+	return out, nil
 }
 
 func (c *Collector) DiskUsage(dirs []string) (int64, error) {
@@ -170,12 +189,22 @@ func (c *Collector) gatherDeps(name string, deps map[string]struct{}) error {
 }
 
 func (c *Collector) Sweep() ([]string, error) {
-	inUse, err := c.markInUse()
+	marked, err := c.Mark()
 	if err != nil {
 		return nil, err
 	}
 
+	return c.SweepUnmarked(marked)
+}
+
+func (c *Collector) SweepUnmarked(marked []string) ([]string, error) {
 	storeDir := filepath.Join(c.dataDir, "store")
+
+	inUse := map[string]struct{}{}
+
+	for _, m := range marked {
+		inUse[m] = struct{}{}
+	}
 
 	var notInUse []string
 
@@ -229,6 +258,11 @@ func (c *Collector) removePackage(name string, sr *SweepResult) error {
 			return err
 		}
 
+		err = os.Chmod(path, info.Mode().Perm()|0600)
+		if err != nil {
+			return err
+		}
+
 		sr.EntriesRemoved++
 		sr.BytesRecovered += info.Size()
 		return nil
@@ -239,8 +273,8 @@ func (c *Collector) removePackage(name string, sr *SweepResult) error {
 	return os.RemoveAll(root)
 }
 
-func (c *Collector) SweepAndRemove() (*SweepResult, error) {
-	notInUse, err := c.Sweep()
+func (c *Collector) SweepAndRemove(marked []string) (*SweepResult, error) {
+	notInUse, err := c.SweepUnmarked(marked)
 	if err != nil {
 		return nil, err
 	}

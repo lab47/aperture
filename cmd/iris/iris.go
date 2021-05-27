@@ -502,6 +502,7 @@ func (i *gcCmd) Run(args []string) int {
 	fs := pflag.NewFlagSet("gc", pflag.ExitOnError)
 
 	gp := fs.BoolP("dry-run", "T", false, "output packages that would be removed")
+	min := fs.BoolP("min", "m", false, "minimize the packages, removing redundent ones")
 
 	err := fs.Parse(args)
 	if err != nil {
@@ -516,12 +517,19 @@ func (i *gcCmd) Run(args []string) int {
 
 	col, err := gc.NewCollector(cfg.DataDir)
 
-	if *gp {
-		toKeep, err := col.Mark()
-		if err != nil {
-			log.Fatal(err)
-		}
+	var toKeep []string
 
+	if *min {
+		toKeep, err = col.MarkMinimal(cfg)
+	} else {
+		toKeep, err = col.Mark()
+	}
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if *gp {
 		fmt.Println("## Packages Kept")
 		for _, p := range toKeep {
 			fmt.Println(p)
@@ -536,7 +544,7 @@ func (i *gcCmd) Run(args []string) int {
 
 		fmt.Printf("=> Disk Usage: %.2f%s\n", sz, unit)
 
-		toRemove, err := col.Sweep()
+		toRemove, err := col.SweepUnmarked(toKeep)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -554,7 +562,31 @@ func (i *gcCmd) Run(args []string) int {
 		sz, unit = humanize.Size(total)
 
 		fmt.Printf("=> Disk Usage: %.2f%s\n", sz, unit)
+
+		return 0
 	}
+
+	total, err := col.DiskUsage(toKeep)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sz, unit := humanize.Size(total)
+
+	fmt.Printf("## Packages Kept: %.2f%s\n", sz, unit)
+	for _, p := range toKeep {
+		fmt.Println(p)
+	}
+
+	res, err := col.SweepAndRemove(toKeep)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	sz, unit = humanize.Size(res.BytesRecovered)
+
+	fmt.Printf("\nSpace Recovered: %.2f%s\n", sz, unit)
+	fmt.Printf("  Files Removed: %d\n", res.EntriesRemoved)
 
 	return 0
 }
