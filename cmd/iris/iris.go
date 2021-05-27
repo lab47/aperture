@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/mitchellh/cli"
@@ -16,6 +16,9 @@ import (
 	"golang.org/x/sys/unix"
 	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/direnv"
+	"lab47.dev/aperture/pkg/gc"
+	"lab47.dev/aperture/pkg/humanize"
+	"lab47.dev/aperture/pkg/lockfile"
 	"lab47.dev/aperture/pkg/ops"
 	"lab47.dev/aperture/pkg/profile"
 )
@@ -33,9 +36,6 @@ func main() {
 		"direnv-dump": func() (cli.Command, error) {
 			return &shell{dump: true}, nil
 		},
-		"xinstall": func() (cli.Command, error) {
-			return &xinstall{}, nil
-		},
 		"inspect-car": func() (cli.Command, error) {
 			return &inspectCar{}, nil
 		},
@@ -45,6 +45,9 @@ func main() {
 		"env": func() (cli.Command, error) {
 			return &env{}, nil
 		},
+		"gc": func() (cli.Command, error) {
+			return &gcCmd{}, nil
+		},
 	}
 
 	exitStatus, err := c.Run()
@@ -53,143 +56,6 @@ func main() {
 	}
 
 	os.Exit(exitStatus)
-}
-
-type xinstall struct {
-	fExplain bool
-}
-
-func (i *xinstall) Help() string {
-	return "install"
-}
-
-func (i *xinstall) Synopsis() string {
-	return "install"
-}
-
-func (i *xinstall) Run(args []string) int {
-	fs := pflag.NewFlagSet("install", pflag.ExitOnError)
-
-	fs.BoolVarP(&i.fExplain, "explain", "E", false,
-		"Explain what will be installed")
-
-	err := fs.Parse(args)
-	if err != nil {
-		fmt.Printf("Error: %s\n", err)
-		return 1
-	}
-
-	cr := &ops.ConfigRepo{
-		Path: "./is-packages",
-	}
-
-	storeDir := "/opt/iris/store"
-
-	err = os.MkdirAll(storeDir, 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var sl ops.ScriptLoad
-	sl.StoreDir = storeDir
-
-	data, err := sl.Load("protobuf", ops.WithConfigRepo(cr))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var pci ops.PackageCalcInstall
-	pci.StoreDir = storeDir
-
-	toInstall, err := pci.Calculate(data)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if i.fExplain {
-		tw := tabwriter.NewWriter(os.Stdout, 2, 2, 1, ' ', 0)
-		defer tw.Flush()
-
-		fmt.Fprintf(tw, "NAME\tVERSION\tSTATUS\tDEPENDENCIES\n")
-
-		for _, p := range toInstall.InstallOrder {
-			flag := " "
-			if toInstall.Installed[p] {
-				flag = "I"
-			}
-
-			var shortDeps []string
-
-			for _, dep := range toInstall.Dependencies[p] {
-				scr := toInstall.Scripts[dep]
-
-				if scr == nil || scr.Name() == "" {
-					continue
-				}
-
-				shortDeps = append(shortDeps, scr.Name())
-			}
-
-			deps := strings.Join(shortDeps, " ")
-
-			script := toInstall.Scripts[p]
-
-			if script == nil || script.Name() == "" {
-				continue
-			}
-
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", script.Name(), script.Version(), flag, deps)
-		}
-
-		return 0
-	}
-
-	buildRoot := filepath.Join(storeDir, "_build")
-
-	err = os.MkdirAll(buildRoot, 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ienv := &ops.InstallEnv{
-		BuildDir: buildRoot,
-		StoreDir: storeDir,
-	}
-
-	err = os.MkdirAll(ienv.StoreDir, 0755)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var pkgInst ops.PackagesInstall
-
-	err = pkgInst.Install(context.TODO(), ienv, toInstall)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	prof, err := profile.OpenProfile("iris-profile")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = prof.Link(data.ID(), toInstall.InstallDirs[data.ID()])
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = prof.Commit()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	updates := prof.UpdateEnv(os.Environ())
-
-	for _, u := range updates {
-		fmt.Println(u)
-	}
-
-	return 0
 }
 
 type install struct {
@@ -205,6 +71,17 @@ func (i *install) Help() string {
 
 func (i *install) Synopsis() string {
 	return "install"
+}
+
+func cancelOnSignal(cancel func(), signals ...os.Signal) {
+	c := make(chan os.Signal, 2)
+	signal.Notify(c, signals...)
+
+	go func() {
+		for range c {
+			cancel()
+		}
+	}()
 }
 
 func (i *install) Run(args []string) int {
@@ -253,7 +130,9 @@ func (i *install) Run(args []string) int {
 		log.Fatal(err)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cancelOnSignal(cancel, os.Interrupt, unix.SIGQUIT, unix.SIGTERM)
 
 	if i.fExplain {
 		err := proj.Explain(ctx, ienv)
@@ -263,6 +142,19 @@ func (i *install) Run(args []string) int {
 
 		return 0
 	}
+
+	var showLock bool
+	cleanup, err := lockfile.Take(ctx, ".iris-lock", func() {
+		if !showLock {
+			fmt.Printf("Lock detected, waiting...\n")
+			showLock = true
+		}
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer cleanup()
 
 	requested, toInstall, err := proj.InstallPackages(ctx, ienv)
 	if err != nil {
@@ -293,7 +185,7 @@ func (i *install) Run(args []string) int {
 		profilePath = cfg.GlobalProfilePath()
 	}
 
-	prof, err := profile.OpenProfile(profilePath)
+	prof, err := profile.OpenProfile(cfg, profilePath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -377,7 +269,7 @@ func (i *shell) Run(args []string) int {
 		log.Fatal(err)
 	}
 
-	prof, err := profile.OpenProfile(".iris-profile")
+	prof, err := profile.OpenProfile(cfg, ".iris-profile")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -522,6 +414,77 @@ func (i *env) Run(args []string) int {
 
 	if *gp {
 		fmt.Println(cfg.GlobalProfilePath())
+	}
+
+	return 0
+}
+
+type gcCmd struct{}
+
+func (i *gcCmd) Help() string {
+	return "provide environment information"
+}
+
+func (i *gcCmd) Synopsis() string {
+	return "provide environment information"
+}
+
+func (i *gcCmd) Run(args []string) int {
+	fs := pflag.NewFlagSet("gc", pflag.ExitOnError)
+
+	gp := fs.BoolP("dry-run", "T", false, "output packages that would be removed")
+
+	err := fs.Parse(args)
+	if err != nil {
+		fmt.Printf("Error: %s\n", err)
+		return 1
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	col, err := gc.NewCollector(cfg.DataDir)
+
+	if *gp {
+		toKeep, err := col.Mark()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Println("## Packages Kept")
+		for _, p := range toKeep {
+			fmt.Println(p)
+		}
+
+		total, err := col.DiskUsage(toKeep)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		sz, unit := humanize.Size(total)
+
+		fmt.Printf("=> Disk Usage: %.2f%s\n", sz, unit)
+
+		toRemove, err := col.Sweep()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Println("\n## Packages Removed")
+		for _, p := range toRemove {
+			fmt.Println(p)
+		}
+
+		total, err = col.DiskUsage(toRemove)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		sz, unit = humanize.Size(total)
+
+		fmt.Printf("=> Disk Usage: %.2f%s\n", sz, unit)
 	}
 
 	return 0

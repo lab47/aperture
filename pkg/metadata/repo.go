@@ -7,8 +7,9 @@ import (
 )
 
 type RepoConfig struct {
-	Id      string   `json:"id"`
-	CarURLS []string `json:"car_urls"`
+	Id           string   `json:"id"`
+	CarURLS      []string `json:"car_urls"`
+	RegistryPath string   `json:"registry_path"`
 }
 
 func (r *RepoConfig) CalculateCarURLs(name string) []string {

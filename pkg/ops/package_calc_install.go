@@ -51,9 +51,9 @@ func (p *PackageCalcInstall) isInstalled(id string) (bool, error) {
 		return false, nil
 	}
 
-	path := filepath.Join(p.StoreDir, id)
+	path := filepath.Join(p.StoreDir, id, ".pkg-info.json")
 
-	fi, err := os.Stat(path)
+	_, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -62,11 +62,7 @@ func (p *PackageCalcInstall) isInstalled(id string) (bool, error) {
 		return false, err
 	}
 
-	if fi.IsDir() {
-		return true, nil
-	}
-
-	return false, errors.Wrapf(ErrCorruption, "store path not a dir: %s", path)
+	return true, nil
 }
 
 func (p *PackageCalcInstall) consider(
@@ -77,12 +73,6 @@ func (p *PackageCalcInstall) consider(
 	installed, err := p.isInstalled(pkg.ID())
 	if err != nil {
 		return err
-	}
-
-	if installed {
-		pti.Installed[pkg.ID()] = true
-		pti.Scripts[pkg.ID()] = pkg
-		return nil
 	}
 
 	pti.PackageIDs = append(pti.PackageIDs, pkg.ID())
@@ -130,7 +120,11 @@ func (p *PackageCalcInstall) consider(
 		}
 	}
 
-	pti.Installers[pkg.ID()] = &ScriptInstall{common: p.common, pkg: pkg}
+	if !installed {
+		pti.Installers[pkg.ID()] = &ScriptInstall{common: p.common, pkg: pkg}
+	}
+
+	pti.Installed[pkg.ID()] = installed
 	pti.Scripts[pkg.ID()] = pkg
 
 	for _, dep := range pkg.Dependencies() {

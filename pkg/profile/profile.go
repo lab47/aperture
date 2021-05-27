@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mr-tron/base58"
+	"lab47.dev/aperture/pkg/config"
 )
 
 type profileChange struct {
@@ -18,7 +21,7 @@ type Profile struct {
 	changes []profileChange
 }
 
-func OpenProfile(path string) (*Profile, error) {
+func OpenProfile(cfg *config.Config, path string) (*Profile, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -28,6 +31,10 @@ func OpenProfile(path string) (*Profile, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	hashName := base58.Encode([]byte(path))
+
+	os.Symlink(filepath.Join(path, ".refs"), filepath.Join(cfg.RootsPath(), hashName))
 
 	return &Profile{path: path}, nil
 }

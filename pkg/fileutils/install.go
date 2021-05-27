@@ -1,6 +1,7 @@
 package fileutils
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,11 +12,25 @@ import (
 )
 
 type Install struct {
+	Ctx     context.Context
 	L       hclog.Logger
 	Pattern string
 	Dest    string
 	Linked  bool
 	ModeOr  os.FileMode
+}
+
+func (i *Install) shouldCancel() error {
+	if i.Ctx == nil {
+		return nil
+	}
+
+	select {
+	case <-i.Ctx.Done():
+		return i.Ctx.Err()
+	default:
+		return nil
+	}
 }
 
 func (i *Install) Install() error {
@@ -88,6 +103,10 @@ func (i *Install) Install() error {
 }
 
 func (i *Install) copyEntry(from, to string) error {
+	if err := i.shouldCancel(); err != nil {
+		return err
+	}
+
 	i.L.Debug("copy entry", "from", from, "to", to)
 
 	f, err := os.Open(from)

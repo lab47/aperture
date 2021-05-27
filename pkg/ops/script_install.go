@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -216,14 +217,32 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 
 	err := os.Mkdir(buildDir, 0755)
 	if err != nil {
-		return err
+		// Possible crash? Nuke the build dir.
+		if !os.IsExist(err) {
+			return err
+		}
+
+		os.RemoveAll(buildDir)
+		err := os.Mkdir(buildDir, 0755)
+		if err != nil {
+			return err
+		}
 	}
 
 	defer os.RemoveAll(buildDir)
 
 	err = os.Mkdir(targetDir, 0755)
 	if err != nil {
-		return err
+		// Possible crash? Nuke the target dir.
+		if !os.IsExist(err) {
+			return err
+		}
+
+		os.RemoveAll(targetDir)
+		err := os.Mkdir(targetDir, 0755)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = i.setupInputs(ui, ienv, buildDir)
@@ -536,7 +555,7 @@ func addHash(rc *RunCtx, parts ...interface{}) (exprcore.Value, error) {
 		case string:
 			fmt.Fprintln(rc.h, strconv.Quote(v))
 		default:
-			fmt.Fprintln(rc.h, "%v", v)
+			fmt.Fprintf(rc.h, "%v\n", v)
 		}
 	}
 
@@ -887,7 +906,7 @@ func systemFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple,
 	exe := segments[0]
 	var err error
 
-	env.L.Info("system", "args", segments, "path", env.path, "env", env.extraEnv)
+	env.L.Debug("system", "args", segments, "path", env.path, "env", env.extraEnv)
 
 	if filepath.Base(exe) == exe {
 		exe, err = lookPath(exe, env.path)
@@ -896,7 +915,7 @@ func systemFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple,
 		}
 	}
 
-	cmd := exec.Command(exe, segments[1:]...)
+	cmd := exec.CommandContext(env.ctx, exe, segments[1:]...)
 	cmd.Env = env.extraEnv
 	cmd.Dir = filepath.Join(env.buildDir, dir)
 
@@ -1373,7 +1392,7 @@ func unpackFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple,
 		output = filepath.Dir(path)
 	}
 
-	env.L.Info("unpacking", "path", path, "output", output)
+	env.L.Debug("unpacking", "path", path, "output", output)
 
 	dec, ok = getter.Decompressors[archive]
 	if !ok {
@@ -1434,7 +1453,12 @@ func downloadFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tupl
 		return addHash(env, "download", "url", url, "path", path)
 	}
 
-	resp, err := cleanhttp.Get(url)
+	req, err := http.NewRequestWithContext(env.ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := cleanhttp.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -1443,7 +1467,7 @@ func downloadFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tupl
 
 	path = env.workPath(path)
 
-	env.L.Info("downloading url", "url", url, "into", path)
+	env.L.Debug("downloading url", "url", url, "into", path)
 
 	f, err := os.Create(path)
 	if err != nil {
@@ -1536,6 +1560,7 @@ func installFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple
 	target = env.workPath(target)
 
 	var inst fileutils.Install
+	inst.Ctx = env.ctx
 	inst.L = env.L
 	inst.Dest = target
 	inst.Pattern = pattern

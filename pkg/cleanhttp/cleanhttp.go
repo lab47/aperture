@@ -28,3 +28,7 @@ var DefaultClient = &http.Client{
 func Get(url string) (resp *http.Response, err error) {
 	return DefaultClient.Get(url)
 }
+
+func Do(req *http.Request) (resp *http.Response, err error) {
+	return DefaultClient.Do(req)
+}

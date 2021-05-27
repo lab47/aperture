@@ -30,13 +30,13 @@ func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInsta
 		storeDir := filepath.Join(p.ienv.StoreDir, id)
 		toInstall.InstallDirs[id] = storeDir
 
-		if _, err := os.Stat(storeDir); err == nil {
+		if toInstall.Installed[id] {
 			continue
 		}
 
 		fn, ok := toInstall.Installers[id]
 		if !ok {
-			return errors.Wrapf(ErrInstallError, "missing installer for %s", id)
+			continue
 		}
 
 		p.L().Debug("running installer", "id", id)

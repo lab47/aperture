@@ -305,9 +305,9 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 
 		var shortDeps []string
 
-		for _, dep := range toInstall.Dependencies[p] {
-			scr := toInstall.Scripts[dep]
+		pkg := toInstall.Scripts[p]
 
+		for _, scr := range pkg.Dependencies() {
 			if scr == nil || scr.Name() == "" {
 				continue
 			}
@@ -400,29 +400,31 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 		return nil, nil, err
 	}
 
-	var d homebrew.Downloader
+	if len(urls) > 0 {
+		var d homebrew.Downloader
 
-	hbtmp := filepath.Join(ienv.StoreDir, "_hb-cache")
-	err = os.MkdirAll(hbtmp, 0755)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	files, err := d.Stage(hbtmp, urls)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	for i, rp := range res.ToInstall {
-		u := urls[i]
-		pkgPath, err := p.install(ctx, rp, u.Binary, files[u.URL])
+		hbtmp := filepath.Join(ienv.StoreDir, "_hb-cache")
+		err = os.MkdirAll(hbtmp, 0755)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		if _, ok := add[rp.Name]; ok {
-			requested = append(requested, rp.Name)
-			toInstall.InstallDirs[rp.Name] = pkgPath
+		files, err := d.Stage(hbtmp, urls)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		for i, rp := range res.ToInstall {
+			u := urls[i]
+			pkgPath, err := p.install(ctx, rp, u.Binary, files[u.URL])
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if _, ok := add[rp.Name]; ok {
+				requested = append(requested, rp.Name)
+				toInstall.InstallDirs[rp.Name] = pkgPath
+			}
 		}
 	}
 
