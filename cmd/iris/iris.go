@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -96,7 +97,7 @@ func (i *install) Run(args []string) int {
 	fs.BoolVar(&i.fPublish, "publish", false,
 		"publish the exported .car files to the repo's publish address")
 
-	fs.BoolVar(&i.fGlobal, "global-profile", false,
+	fs.BoolVarP(&i.fGlobal, "global-profile", "G", false,
 		"install into the user's global profile")
 
 	err := fs.Parse(args)
@@ -123,9 +124,23 @@ func (i *install) Run(args []string) int {
 		BuildDir: buildRoot,
 	}
 
-	var cl ops.ProjectLoad
+	var (
+		proj *ops.Project
+		cl   ops.ProjectLoad
+	)
 
-	proj, err := cl.Load(cfg)
+	profilePath := ".iris-profile"
+
+	if i.fGlobal {
+		profilePath = cfg.GlobalProfilePath()
+	}
+
+	if fs.NArg() == 0 {
+		proj, err = cl.Load(cfg)
+	} else {
+		proj, err = cl.Single(cfg, fs.Arg(0))
+	}
+
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -161,28 +176,35 @@ func (i *install) Run(args []string) int {
 		log.Fatal(err)
 	}
 
-	if i.fExport != "" {
-		err := os.MkdirAll(i.fExport, 0755)
+	exportDir := i.fExport
+
+	if i.fPublish && exportDir == "" {
+		dir, err := ioutil.TempDir("", "iris")
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		cars, err := proj.Export(ctx, cfg, i.fExport)
+		exportDir = dir
+
+		defer os.RemoveAll(dir)
+	}
+
+	if exportDir != "" {
+		err := os.MkdirAll(exportDir, 0755)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		cars, err := proj.Export(ctx, cfg, exportDir)
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		if i.fPublish {
-			return publishCars(cars)
+			return publishCars(ctx, cars)
 		}
 
 		return 0
-	}
-
-	profilePath := ".iris-profile"
-
-	if i.fGlobal {
-		profilePath = cfg.GlobalProfilePath()
 	}
 
 	prof, err := profile.OpenProfile(cfg, profilePath)
@@ -211,11 +233,14 @@ func (i *install) Run(args []string) int {
 	return 0
 }
 
-func publishCars(cars []*ops.ExportedCar) int {
-	for _, car := range cars {
-		var cp ops.CarPublish
+func publishCars(ctx context.Context, cars []*ops.ExportedCar) int {
+	var cp ops.CarPublish
+	cp.Username = os.Getenv("GITHUB_USER")
+	cp.Password = os.Getenv("GITHUB_TOKEN")
 
-		err := cp.PublishCar(car.Path, "ghcr.io/lab47")
+	for _, car := range cars {
+		fmt.Printf("Publishing %s\n", car.Path)
+		err := cp.PublishCar(ctx, car.Path, "ghcr.io/lab47/aperture-packages")
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -370,6 +395,8 @@ func (i *publishCar) Synopsis() string {
 func (i *publishCar) Run(args []string) int {
 	fs := pflag.NewFlagSet("inspect-car", pflag.ExitOnError)
 
+	built := fs.BoolP("built", "B", false, "publish all built packages")
+
 	err := fs.Parse(args)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err)
@@ -377,13 +404,55 @@ func (i *publishCar) Run(args []string) int {
 	}
 
 	var cp ops.CarPublish
+	cp.Username = os.Getenv("GITHUB_USER")
+	cp.Password = os.Getenv("GITHUB_TOKEN")
 
-	err = cp.PublishCar(fs.Arg(0), "ghcr.io/lab47")
+	if !*built {
+		err = cp.PublishCar(context.Background(), fs.Arg(0), "ghcr.io/lab47/aperture-packages")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	var ss ops.StoreScan
+
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	return 0
+	pkgs, err := ss.Scan(cfg, true)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, pkg := range pkgs {
+		fmt.Println(pkg.Package.ID())
+	}
+
+	dir, err := ioutil.TempDir("", "iris")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer os.RemoveAll(dir)
+
+	proj := &ops.Project{}
+
+	for _, pkg := range pkgs {
+		proj.Install = append(proj.Install, pkg.Package)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cancelOnSignal(cancel, os.Interrupt, unix.SIGQUIT, unix.SIGTERM)
+
+	cars, err := proj.Export(ctx, cfg, dir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return publishCars(ctx, cars)
 }
 
 type env struct{}

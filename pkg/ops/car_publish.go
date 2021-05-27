@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -20,10 +22,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/stream"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/pkg/errors"
+	pb "github.com/schollz/progressbar/v3"
 	"lab47.dev/aperture/pkg/data"
 )
 
 type CarPublish struct {
+	Username string
+	Password string
 }
 
 func (c *CarPublish) getInfo(path string) (*data.CarInfo, error) {
@@ -60,13 +65,13 @@ func (c *CarPublish) getInfo(path string) (*data.CarInfo, error) {
 	}
 }
 
-func (c *CarPublish) PublishCar(path, repo string) error {
+func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {
 	info, err := c.getInfo(path)
 	if err != nil {
 		return err
 	}
 
-	target := fmt.Sprintf("%s/%s-%s:%s", repo, info.Name, info.Version, info.ID)
+	target := fmt.Sprintf("%s:%s", repo, info.ID)
 
 	ref, err := name.ParseReference(target)
 	if err != nil {
@@ -126,12 +131,18 @@ func (c *CarPublish) PublishCar(path, repo string) error {
 
 	man.MediaType = types.OCIManifestSchema1
 	man.SchemaVersion = 2
+
+	source := info.Repo
+	if strings.HasPrefix(source, "github.com/") {
+		source = "https://" + info.Repo
+	}
+
 	man.Annotations = map[string]string{
 		"com.github.package.type":              "aperture-package",
 		"org.opencontainers.image.description": "Aperture Package",
 		"org.opencontainers.image.ref.name":    info.ID,
 		"org.opencontainers.image.revision":    hashRef,
-		"org.opencontainers.image.source":      info.Repo,
+		"org.opencontainers.image.source":      source,
 		"org.opencontainers.image.title":       info.Name + "-" + info.Version,
 		"org.opencontainers.image.vendor":      "lab47",
 		"org.opencontainers.image.version":     info.Version,
@@ -148,11 +159,44 @@ func (c *CarPublish) PublishCar(path, repo string) error {
 	img.manifest = &man
 	img.manifestData = data
 
+	u := make(chan v1.Update, 1)
+
+	var wg sync.WaitGroup
+
+	defer wg.Wait()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var bar *pb.ProgressBar
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update, ok := <-u:
+				if !ok {
+					return
+				}
+
+				if bar == nil {
+					bar = pb.DefaultBytes(update.Total, "Uploading")
+					defer bar.Close()
+				}
+
+				bar.ChangeMax64(update.Total)
+				bar.Set64(update.Complete)
+			}
+		}
+	}()
+
 	return remote.Write(ref, &img,
+		remote.WithContext(ctx),
 		remote.WithJobs(1),
+		remote.WithProgress(u),
 		remote.WithAuth(&authn.Basic{
-			Username: "evanphx",
-			Password: "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",
+			Username: c.Username,
+			Password: c.Password,
 		}))
 
 	/*
@@ -285,7 +329,7 @@ func (cr *trackReader) Close() error {
 	}
 	cr.l.digest = &digest
 
-	fmt.Printf("layer uploaded: %d => %s", cr.l.size, digest.String())
+	// fmt.Printf("layer uploaded: %d => %s", cr.l.size, digest.String())
 
 	cr.l.consumed = true
 	return nil

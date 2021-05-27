@@ -146,6 +146,48 @@ func (c *ProjectLoad) Load(cfg *config.Config) (*Project, error) {
 	return &proj, nil
 }
 
+func (c *ProjectLoad) Single(cfg *config.Config, name string) (*Project, error) {
+	c.storeDir = cfg.StorePath()
+
+	var lf data.LockFile
+	f, err := os.Open("aperture-lock.json")
+	if err == nil {
+		err = json.NewDecoder(f).Decode(&lf)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, ent := range lf {
+			if len(ent.Path) >= 2 && ent.Path[0] == '~' {
+				dir, err := homedir.Expand(ent.Path)
+				if err != nil {
+					return nil, err
+				}
+
+				ent.Path = dir
+			}
+
+			c.path = append(c.path, ent.Path)
+		}
+	} else {
+		c.path = cfg.LoadPath()
+	}
+
+	c.constraints = config.SystemConstraints()
+
+	pkg, err := c.loadScript(name)
+	if err != nil {
+		return nil, err
+	}
+
+	var proj Project
+	proj.Constraints = c.constraints
+	proj.Cellar = homebrew.DefaultCellar()
+	proj.Install = []*ScriptPackage{pkg}
+
+	return &proj, nil
+}
+
 func (l *ProjectLoad) installFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple, kwargs []exprcore.Tuple) (exprcore.Value, error) {
 	for _, arg := range args {
 		switch i := arg.(type) {
@@ -518,7 +560,7 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 		})
 	}
 
-	return nil, nil
+	return export, nil
 }
 
 func (p *Project) installPackagesHB(ctx context.Context, tmpdir string) error {
