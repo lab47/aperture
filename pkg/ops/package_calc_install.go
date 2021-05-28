@@ -143,26 +143,28 @@ func (p *PackageCalcInstall) consider(
 		}
 	}
 
-	for _, dep := range pkg.cs.Instances {
-		pti.Dependencies[pkg.ID()] = append(pti.Dependencies[pkg.ID()], dep.ID())
-		if _, ok := seen[dep.ID()]; ok {
-			seen[dep.ID()]++
-			continue
-		}
+	if !installed {
+		for _, dep := range pkg.cs.Instances {
+			pti.Dependencies[pkg.ID()] = append(pti.Dependencies[pkg.ID()], dep.ID())
+			if _, ok := seen[dep.ID()]; ok {
+				seen[dep.ID()]++
+				continue
+			}
 
-		seen[dep.ID()] = 1
+			seen[dep.ID()] = 1
 
-		sp := &ScriptPackage{
-			id:       dep.ID(),
-			Instance: dep,
-		}
+			sp := &ScriptPackage{
+				id:       dep.ID(),
+				Instance: dep,
+			}
 
-		sp.cs.Dependencies = dep.Dependencies
-		sp.cs.Install = dep.Fn
+			sp.cs.Dependencies = dep.Dependencies
+			sp.cs.Install = dep.Fn
 
-		err = p.consider(sp, pti, seen)
-		if err != nil {
-			return err
+			err = p.consider(sp, pti, seen)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
