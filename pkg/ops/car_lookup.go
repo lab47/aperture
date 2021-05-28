@@ -84,7 +84,7 @@ func (c *CarLookup) Lookup(repo, name string) (*CarData, error) {
 }
 
 func (c *CarLookup) checkVanity(repo, name string) (*CarData, error) {
-	req, err := http.NewRequest("GET", "https://"+repo+"?chell-get=1", nil)
+	req, err := http.NewRequest("GET", "https://"+repo+"?aperture-get=1", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func checkGHConfig(client httpDo, repo string) (*metadata.RepoConfig, error) {
 
 	name := repo[slash+1:]
 
-	url := fmt.Sprintf("https://%s/repos/%s/contents/chell.json", host, name)
+	url := fmt.Sprintf("https://%s/repos/%s/contents/aperture.json", host, name)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

@@ -57,7 +57,7 @@ func parseMetaImports(r io.Reader) ([]metaImport, error) {
 		if !ok || !strings.EqualFold(e.Name.Local, "meta") {
 			continue
 		}
-		if attrValue(e.Attr, "name") != "chell-import" {
+		if attrValue(e.Attr, "name") != "aperture-import" {
 			continue
 		}
 		if f := strings.Fields(attrValue(e.Attr, "content")); len(f) == 3 {

@@ -6,7 +6,7 @@ import (
 	"lab47.dev/aperture/pkg/metadata"
 )
 
-const Extension = ".chell"
+const Extension = ".xcr"
 
 var (
 	ErrNotFound = errors.New("entry not found")

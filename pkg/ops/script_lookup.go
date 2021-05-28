@@ -11,7 +11,8 @@ import (
 	"strings"
 )
 
-const Extension = ".chell"
+// xcr == exprcore files
+const Extension = ".xcr"
 
 var (
 	ErrNotFound = errors.New("entry not found")
@@ -302,7 +303,7 @@ func (s *ScriptLookup) loadGeneric(p, name string) (ScriptData, error) {
 }
 
 func (s *ScriptLookup) loadVanity(client httpDo, repo, name string) (ScriptData, error) {
-	req, err := http.NewRequest("GET", "https://"+repo+"?chell-get=1", nil)
+	req, err := http.NewRequest("GET", "https://"+repo+"?aperture-get=1", nil)
 	if err != nil {
 		return nil, err
 	}

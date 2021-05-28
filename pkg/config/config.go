@@ -38,7 +38,7 @@ type Config struct {
 
 	// Actual Config
 	DataDir      string `json:"data-dir"`
-	Path         string `json:"chell-path"`
+	Path         string `json:"aperture-path"`
 	ProfilesPath string `json:"profiles-path"`
 	Profile      string `json:"profile"`
 }

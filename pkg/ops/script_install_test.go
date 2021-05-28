@@ -11,7 +11,7 @@ import (
 )
 
 func TestScriptInstall(t *testing.T) {
-	top, err := ioutil.TempDir("", "chell")
+	top, err := ioutil.TempDir("", "aperture")
 	require.NoError(t, err)
 
 	defer os.RemoveAll(top)

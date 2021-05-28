@@ -293,7 +293,7 @@ func (s *ScriptLoad) Load(name string, opts ...Option) (*ScriptPackage, error) {
 		"sys":      sysobj,
 	}
 
-	_, prog, err := exprcore.SourceProgram(name+".chell", data.Script(), vars.Has)
+	_, prog, err := exprcore.SourceProgram(name+Extension, data.Script(), vars.Has)
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +818,7 @@ func (s *ScriptFile) Hash() (uint32, error) {
 }
 
 func (l *ScriptLoad) loadHelpers(s *ScriptPackage, lctx *loadContext, name string, data ScriptData, vars exprcore.StringDict) error {
-	exportName := name + ".export.chell"
+	exportName := name + ".export" + Extension
 	b, err := data.Asset(exportName)
 	if err != nil {
 		return nil

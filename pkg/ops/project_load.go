@@ -125,7 +125,7 @@ func (c *ProjectLoad) Load(cfg *config.Config) (*Project, error) {
 		"platform": &platform{},
 	}
 
-	_, prog, err := exprcore.SourceProgram("project.chell", nil, vars.Has)
+	_, prog, err := exprcore.SourceProgram("project"+Extension, nil, vars.Has)
 	if err != nil {
 		return nil, err
 	}
