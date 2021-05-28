@@ -31,15 +31,16 @@ func main() {
 		"install": func() (cli.Command, error) {
 			return cmd.New(
 				"install",
-				"Install specified package or from package file",
+				"Install specified package or from project file",
 				installF,
 			), nil
 		},
 		"shell": func() (cli.Command, error) {
-			return &shell{}, nil
-		},
-		"direnv-dump": func() (cli.Command, error) {
-			return &shell{dump: true}, nil
+			return cmd.New(
+				"shell",
+				"Run or get information about a shell for the project file",
+				shellF,
+			), nil
 		},
 		"inspect-car": func() (cli.Command, error) {
 			return cmd.New(
@@ -152,7 +153,7 @@ func installF(ctx context.Context, opts struct {
 
 	requested, toInstall, err := proj.InstallPackages(ctx, ienv)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	exportDir := opts.Export
@@ -228,22 +229,13 @@ func publishCars(ctx context.Context, cars []*ops.ExportedCar) error {
 	return nil
 }
 
-type shell struct {
-	dump bool
-}
-
-func (i *shell) Help() string {
-	return "shell"
-}
-
-func (i *shell) Synopsis() string {
-	return "shell"
-}
-
-func (i *shell) Run(args []string) int {
+func shellF(ctx context.Context, opts struct {
+	DumpEnv bool     `short:"E" long:"dump-env" description:"dump updated env in direnv format"`
+	Args    []string `positional-args:"yes"`
+}) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	storeDir := cfg.StorePath()
@@ -251,7 +243,7 @@ func (i *shell) Run(args []string) int {
 
 	err = os.MkdirAll(buildRoot, 0755)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	ienv := &ops.InstallEnv{
@@ -263,34 +255,47 @@ func (i *shell) Run(args []string) int {
 
 	proj, err := cl.Load(cfg)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	ctx := context.Background()
+	var showLock bool
+	cleanup, err := lockfile.Take(ctx, ".iris-lock", func() {
+		if !showLock {
+			fmt.Printf("Lock detected, waiting...\n")
+			showLock = true
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	defer cleanup()
 
 	requested, toInstall, err := proj.InstallPackages(ctx, ienv)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	prof, err := profile.OpenProfile(cfg, ".iris-profile")
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	for _, id := range requested {
 		err = prof.Link(id, toInstall.InstallDirs[id])
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
 	err = prof.Commit()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	if i.dump {
+	cleanup()
+
+	if opts.DumpEnv {
 		var w io.Writer
 
 		path := os.Getenv("DIRENV_DUMP_FILE_PATH")
@@ -300,7 +305,7 @@ func (i *shell) Run(args []string) int {
 		} else {
 			f, err := os.Create(path)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 
 			defer f.Close()
@@ -309,20 +314,17 @@ func (i *shell) Run(args []string) int {
 		}
 
 		fmt.Fprintln(w, direnv.Dump(prof.EnvMap(os.Environ())))
-		return 0
+		return nil
 	}
 
 	env := prof.ComputeEnv(os.Environ())
 
-	path, err := exec.LookPath(args[0])
+	path, err := exec.LookPath(opts.Args[0])
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	err = unix.Exec(path, args, env)
-	log.Fatal(err)
-
-	return 0
+	return unix.Exec(path, opts.Args, env)
 }
 
 func inspectCarF(ctx context.Context, opts struct {
@@ -332,7 +334,7 @@ func inspectCarF(ctx context.Context, opts struct {
 }) error {
 	f, err := os.Open(opts.Args.File)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	defer f.Close()
@@ -402,17 +404,17 @@ func publishCarF(ctx context.Context, opts struct {
 
 func envF(ctx context.Context, opts struct {
 	Global bool `short:"G" long:"global-profile" description:"output location of global profile"`
-}) int {
+}) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	if opts.Global {
 		fmt.Println(cfg.GlobalProfilePath())
 	}
 
-	return 0
+	return nil
 }
 
 func gcF(ctx context.Context, opts struct {
