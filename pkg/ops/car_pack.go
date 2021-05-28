@@ -69,19 +69,12 @@ func (c *CarPack) Pack(cinfo *data.CarInfo, dir string, w io.Writer) error {
 	for _, file := range files {
 		trbuf.Reset()
 
-		f, err := os.Open(file)
+		fi, err := os.Lstat(file)
 		if err != nil {
 			return err
 		}
 
 		err = func() error {
-			defer f.Close()
-
-			fi, err := f.Stat()
-			if err != nil {
-				return err
-			}
-
 			var link string
 
 			if fi.Mode()&os.ModeSymlink != 0 {
@@ -90,11 +83,17 @@ func (c *CarPack) Pack(cinfo *data.CarInfo, dir string, w io.Writer) error {
 					return err
 				}
 
-				if !strings.HasPrefix(link, dir) {
-					return fmt.Errorf("link points outside of root dir: %s", link)
+				abs := link
+
+				if !filepath.IsAbs(abs) {
+					abs = filepath.Join(filepath.Dir(file), link)
+				} else {
+					link = link[len(dir)+1:]
 				}
 
-				link = link[len(dir)+1:]
+				if !strings.HasPrefix(abs, dir) {
+					return fmt.Errorf("link points outside of root dir: %s", link)
+				}
 			}
 
 			hdr, err := tar.FileInfoHeader(fi, link)
@@ -144,6 +143,13 @@ func (c *CarPack) Pack(cinfo *data.CarInfo, dir string, w io.Writer) error {
 			} else {
 				w = io.MultiWriter(tw, dh)
 			}
+
+			f, err := os.Open(file)
+			if err != nil {
+				return err
+			}
+
+			defer f.Close()
 
 			_, err = io.Copy(w, f)
 

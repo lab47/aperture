@@ -12,9 +12,11 @@ import (
 
 	"github.com/lab47/exprcore/exprcore"
 	"github.com/mitchellh/go-homedir"
+	"github.com/pkg/errors"
 	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/homebrew"
+	"lab47.dev/aperture/pkg/progress"
 )
 
 type ConfigRepo struct {
@@ -154,14 +156,14 @@ func (c *ProjectLoad) Single(cfg *config.Config, name string) (*Project, error) 
 	if err == nil {
 		err = json.NewDecoder(f).Decode(&lf)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "decoding aperture-lock.json")
 		}
 
 		for _, ent := range lf {
 			if len(ent.Path) >= 2 && ent.Path[0] == '~' {
 				dir, err := homedir.Expand(ent.Path)
 				if err != nil {
-					return nil, err
+					return nil, errors.Wrapf(err, "expanding with homedir")
 				}
 
 				ent.Path = dir
@@ -177,7 +179,7 @@ func (c *ProjectLoad) Single(cfg *config.Config, name string) (*Project, error) 
 
 	pkg, err := c.loadScript(name)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "attempting to load '%s'", name)
 	}
 
 	var proj Project
@@ -496,7 +498,12 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 
 	var export []*ExportedCar
 
+	pb := progress.Count(ctx, int64(len(pkgs)), "Exporting")
+	defer pb.Close()
+
 	for _, pkg := range pkgs {
+		pb.On(pkg.name)
+
 		pi, err := pri.Read(pkg)
 		if err != nil {
 			return nil, err
@@ -558,6 +565,8 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 			Path:    carPath,
 			Sum:     cp.Sum,
 		})
+
+		pb.Tick()
 	}
 
 	return export, nil

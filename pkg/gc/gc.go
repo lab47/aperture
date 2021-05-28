@@ -1,6 +1,7 @@
 package gc
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/ops"
+	"lab47.dev/aperture/pkg/progress"
 )
 
 type Collector struct {
@@ -94,13 +96,24 @@ func (c *Collector) MarkMinimal(cfg *config.Config) ([]string, error) {
 		return nil, err
 	}
 
-	var out []string
-
-	for _, pkg := range pkgs {
-		out = append(out, pkg.Info.Id)
+	seen, err := c.markInUse()
+	if err != nil {
+		return nil, err
 	}
 
-	return out, nil
+	for _, pkg := range pkgs {
+		seen[pkg.Info.Id] = struct{}{}
+	}
+
+	var total []string
+
+	for k := range seen {
+		total = append(total, k)
+	}
+
+	sort.Strings(total)
+
+	return total, nil
 }
 
 func (c *Collector) DiskUsage(dirs []string) (int64, error) {
@@ -188,16 +201,16 @@ func (c *Collector) gatherDeps(name string, deps map[string]struct{}) error {
 	return nil
 }
 
-func (c *Collector) Sweep() ([]string, error) {
+func (c *Collector) Sweep(ctx context.Context) ([]string, error) {
 	marked, err := c.Mark()
 	if err != nil {
 		return nil, err
 	}
 
-	return c.SweepUnmarked(marked)
+	return c.SweepUnmarked(ctx, marked)
 }
 
-func (c *Collector) SweepUnmarked(marked []string) ([]string, error) {
+func (c *Collector) SweepUnmarked(ctx context.Context, marked []string) ([]string, error) {
 	storeDir := filepath.Join(c.dataDir, "store")
 
 	inUse := map[string]struct{}{}
@@ -258,9 +271,11 @@ func (c *Collector) removePackage(name string, sr *SweepResult) error {
 			return err
 		}
 
-		err = os.Chmod(path, info.Mode().Perm()|0600)
-		if err != nil {
-			return err
+		if info.Mode().Perm()&0600 == 0 {
+			err = os.Chmod(path, info.Mode().Perm()|0600)
+			if err != nil {
+				return err
+			}
 		}
 
 		sr.EntriesRemoved++
@@ -273,8 +288,8 @@ func (c *Collector) removePackage(name string, sr *SweepResult) error {
 	return os.RemoveAll(root)
 }
 
-func (c *Collector) SweepAndRemove(marked []string) (*SweepResult, error) {
-	notInUse, err := c.SweepUnmarked(marked)
+func (c *Collector) SweepAndRemove(ctx context.Context, marked []string) (*SweepResult, error) {
+	notInUse, err := c.SweepUnmarked(ctx, marked)
 	if err != nil {
 		return nil, err
 	}
@@ -282,11 +297,16 @@ func (c *Collector) SweepAndRemove(marked []string) (*SweepResult, error) {
 	var sr SweepResult
 	sr.Removed = notInUse
 
+	pb := progress.Count(ctx, int64(len(notInUse)), "Removing packages")
+	defer pb.Close()
+
 	for _, name := range notInUse {
 		err = c.removePackage(name, &sr)
 		if err != nil {
 			return nil, err
 		}
+
+		pb.Tick()
 	}
 
 	return &sr, nil

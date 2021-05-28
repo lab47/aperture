@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/pkg/errors"
 	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
 )
@@ -38,7 +39,7 @@ func (s *StoreScan) Scan(cfg *config.Config, validate bool) ([]*ScannedPackage, 
 			if err == io.EOF {
 				break
 			}
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 
 		for _, n := range names {
@@ -55,7 +56,7 @@ func (s *StoreScan) Scan(cfg *config.Config, validate bool) ([]*ScannedPackage, 
 			g.Close()
 
 			if err != nil {
-				return nil, err
+				return nil, errors.Wrapf(err, "decoding package info for: %s", n)
 			}
 
 			if pk.Id != n || pk.Name == "" {
@@ -90,6 +91,10 @@ func (s *StoreScan) validate(
 		if !ok {
 			proj, err := pl.Single(cfg, sp.Info.Name)
 			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					continue
+				}
+
 				return nil, err
 			}
 

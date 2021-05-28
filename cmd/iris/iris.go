@@ -8,13 +8,13 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/mitchellh/cli"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
+	"lab47.dev/aperture/pkg/cmd"
 	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/direnv"
 	"lab47.dev/aperture/pkg/gc"
@@ -25,11 +25,15 @@ import (
 )
 
 func main() {
-	c := cli.NewCLI("app", "1.0.0")
+	c := cli.NewCLI("iris", "0.1.0")
 	c.Args = os.Args[1:]
 	c.Commands = map[string]cli.CommandFactory{
 		"install": func() (cli.Command, error) {
-			return &install{}, nil
+			return cmd.New(
+				"install",
+				"Install specified package or from package file",
+				installF,
+			), nil
 		},
 		"shell": func() (cli.Command, error) {
 			return &shell{}, nil
@@ -38,16 +42,32 @@ func main() {
 			return &shell{dump: true}, nil
 		},
 		"inspect-car": func() (cli.Command, error) {
-			return &inspectCar{}, nil
+			return cmd.New(
+				"inspect-car",
+				"output information about a .car file",
+				inspectCarF,
+			), nil
 		},
 		"publish-car": func() (cli.Command, error) {
-			return &publishCar{}, nil
+			return cmd.New(
+				"publish-car",
+				"publish one or many .car files",
+				publishCarF,
+			), nil
 		},
 		"env": func() (cli.Command, error) {
-			return &env{}, nil
+			return cmd.New(
+				"env",
+				"Output various environment information",
+				envF,
+			), nil
 		},
 		"gc": func() (cli.Command, error) {
-			return &gcCmd{}, nil
+			return cmd.New(
+				"gc",
+				"Run garbage collector to remove packages",
+				gcF,
+			), nil
 		},
 	}
 
@@ -59,56 +79,19 @@ func main() {
 	os.Exit(exitStatus)
 }
 
-type install struct {
-	fExplain bool
-	fExport  string
-	fPublish bool
-	fGlobal  bool
-}
+func installF(ctx context.Context, opts struct {
+	Explain bool   `short:"E" long:"explain" description:"explain what will be installed"`
+	Export  string `long:"export" description:"write .car files to the given directory"`
+	Publish bool   `long:"publish" description:"publish exported car files to repo"`
+	Global  bool   `short:"G" long:"global" description:"install into the user's global profile"`
 
-func (i *install) Help() string {
-	return "install"
-}
-
-func (i *install) Synopsis() string {
-	return "install"
-}
-
-func cancelOnSignal(cancel func(), signals ...os.Signal) {
-	c := make(chan os.Signal, 2)
-	signal.Notify(c, signals...)
-
-	go func() {
-		for range c {
-			cancel()
-		}
-	}()
-}
-
-func (i *install) Run(args []string) int {
-	fs := pflag.NewFlagSet("install", pflag.ExitOnError)
-
-	fs.BoolVarP(&i.fExplain, "explain", "E", false,
-		"Explain what will be installed")
-
-	fs.StringVar(&i.fExport, "export", "",
-		"write .car files to this directory")
-
-	fs.BoolVar(&i.fPublish, "publish", false,
-		"publish the exported .car files to the repo's publish address")
-
-	fs.BoolVarP(&i.fGlobal, "global-profile", "G", false,
-		"install into the user's global profile")
-
-	err := fs.Parse(args)
-	if err != nil {
-		fmt.Printf("Error: %s\n", err)
-		return 1
-	}
-
+	Pos struct {
+		Package string `positional-arg-name:"name"`
+	} `positional-args:"yes"`
+}) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	storeDir := cfg.StorePath()
@@ -116,7 +99,7 @@ func (i *install) Run(args []string) int {
 
 	err = os.MkdirAll(buildRoot, 0755)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	ienv := &ops.InstallEnv{
@@ -131,31 +114,27 @@ func (i *install) Run(args []string) int {
 
 	profilePath := ".iris-profile"
 
-	if i.fGlobal {
+	if opts.Global {
 		profilePath = cfg.GlobalProfilePath()
 	}
 
-	if fs.NArg() == 0 {
-		proj, err = cl.Load(cfg)
+	if opts.Pos.Package != "" {
+		proj, err = cl.Single(cfg, opts.Pos.Package)
 	} else {
-		proj, err = cl.Single(cfg, fs.Arg(0))
+		proj, err = cl.Load(cfg)
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	cancelOnSignal(cancel, os.Interrupt, unix.SIGQUIT, unix.SIGTERM)
-
-	if i.fExplain {
+	if opts.Explain {
 		err := proj.Explain(ctx, ienv)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
-		return 0
+		return nil
 	}
 
 	var showLock bool
@@ -166,7 +145,7 @@ func (i *install) Run(args []string) int {
 		}
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	defer cleanup()
@@ -176,12 +155,12 @@ func (i *install) Run(args []string) int {
 		log.Fatal(err)
 	}
 
-	exportDir := i.fExport
+	exportDir := opts.Export
 
-	if i.fPublish && exportDir == "" {
+	if opts.Publish && exportDir == "" {
 		dir, err := ioutil.TempDir("", "iris")
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		exportDir = dir
@@ -192,36 +171,36 @@ func (i *install) Run(args []string) int {
 	if exportDir != "" {
 		err := os.MkdirAll(exportDir, 0755)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		cars, err := proj.Export(ctx, cfg, exportDir)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
-		if i.fPublish {
+		if opts.Publish {
 			return publishCars(ctx, cars)
 		}
 
-		return 0
+		return nil
 	}
 
 	prof, err := profile.OpenProfile(cfg, profilePath)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	for _, id := range requested {
 		err = prof.Link(id, toInstall.InstallDirs[id])
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
 	err = prof.Commit()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	updates := prof.UpdateEnv(os.Environ())
@@ -230,10 +209,10 @@ func (i *install) Run(args []string) int {
 		fmt.Println(u)
 	}
 
-	return 0
+	return nil
 }
 
-func publishCars(ctx context.Context, cars []*ops.ExportedCar) int {
+func publishCars(ctx context.Context, cars []*ops.ExportedCar) error {
 	var cp ops.CarPublish
 	cp.Username = os.Getenv("GITHUB_USER")
 	cp.Password = os.Getenv("GITHUB_TOKEN")
@@ -242,11 +221,11 @@ func publishCars(ctx context.Context, cars []*ops.ExportedCar) int {
 		fmt.Printf("Publishing %s\n", car.Path)
 		err := cp.PublishCar(ctx, car.Path, "ghcr.io/lab47/aperture-packages")
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
-	return 0
+	return nil
 }
 
 type shell struct {
@@ -346,26 +325,12 @@ func (i *shell) Run(args []string) int {
 	return 0
 }
 
-type inspectCar struct{}
-
-func (i *inspectCar) Help() string {
-	return "inspect the contents of a car file"
-}
-
-func (i *inspectCar) Synopsis() string {
-	return "inspect the contents of a car file"
-}
-
-func (i *inspectCar) Run(args []string) int {
-	fs := pflag.NewFlagSet("inspect-car", pflag.ExitOnError)
-
-	err := fs.Parse(args)
-	if err != nil {
-		fmt.Printf("Error: %s\n", err)
-		return 1
-	}
-
-	f, err := os.Open(fs.Arg(0))
+func inspectCarF(ctx context.Context, opts struct {
+	Args struct {
+		File string `positional-arg-name:"file"`
+	} `positional-args:"yes"`
+}) error {
+	f, err := os.Open(opts.Args.File)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -379,38 +344,22 @@ func (i *inspectCar) Run(args []string) int {
 
 	ci.Show(f, tw)
 
-	return 0
+	return nil
 }
 
-type publishCar struct{}
-
-func (i *publishCar) Help() string {
-	return "inspect the contents of a car file"
-}
-
-func (i *publishCar) Synopsis() string {
-	return "inspect the contents of a car file"
-}
-
-func (i *publishCar) Run(args []string) int {
+func publishCarF(ctx context.Context, opts struct {
+	Built bool `short:"B" long:"built" description:"publish all built packages"`
+}) error {
 	fs := pflag.NewFlagSet("inspect-car", pflag.ExitOnError)
-
-	built := fs.BoolP("built", "B", false, "publish all built packages")
-
-	err := fs.Parse(args)
-	if err != nil {
-		fmt.Printf("Error: %s\n", err)
-		return 1
-	}
 
 	var cp ops.CarPublish
 	cp.Username = os.Getenv("GITHUB_USER")
 	cp.Password = os.Getenv("GITHUB_TOKEN")
 
-	if !*built {
-		err = cp.PublishCar(context.Background(), fs.Arg(0), "ghcr.io/lab47/aperture-packages")
+	if !opts.Built {
+		err := cp.PublishCar(context.Background(), fs.Arg(0), "ghcr.io/lab47/aperture-packages")
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
@@ -418,12 +367,12 @@ func (i *publishCar) Run(args []string) int {
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	pkgs, err := ss.Scan(cfg, true)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	for _, pkg := range pkgs {
@@ -432,7 +381,7 @@ func (i *publishCar) Run(args []string) int {
 
 	dir, err := ioutil.TempDir("", "iris")
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	defer os.RemoveAll(dir)
@@ -443,93 +392,53 @@ func (i *publishCar) Run(args []string) int {
 		proj.Install = append(proj.Install, pkg.Package)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	cancelOnSignal(cancel, os.Interrupt, unix.SIGQUIT, unix.SIGTERM)
-
 	cars, err := proj.Export(ctx, cfg, dir)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	return publishCars(ctx, cars)
 }
 
-type env struct{}
-
-func (i *env) Help() string {
-	return "provide environment information"
-}
-
-func (i *env) Synopsis() string {
-	return "provide environment information"
-}
-
-func (i *env) Run(args []string) int {
-	fs := pflag.NewFlagSet("env", pflag.ExitOnError)
-
-	gp := fs.BoolP("global-profile", "G", false, "output location of global-profile")
-
-	err := fs.Parse(args)
-	if err != nil {
-		fmt.Printf("Error: %s\n", err)
-		return 1
-	}
-
+func envF(ctx context.Context, opts struct {
+	Global bool `short:"G" long:"global-profile" description:"output location of global profile"`
+}) int {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if *gp {
+	if opts.Global {
 		fmt.Println(cfg.GlobalProfilePath())
 	}
 
 	return 0
 }
 
-type gcCmd struct{}
-
-func (i *gcCmd) Help() string {
-	return "provide environment information"
-}
-
-func (i *gcCmd) Synopsis() string {
-	return "provide environment information"
-}
-
-func (i *gcCmd) Run(args []string) int {
-	fs := pflag.NewFlagSet("gc", pflag.ExitOnError)
-
-	gp := fs.BoolP("dry-run", "T", false, "output packages that would be removed")
-	min := fs.BoolP("min", "m", false, "minimize the packages, removing redundent ones")
-
-	err := fs.Parse(args)
-	if err != nil {
-		fmt.Printf("Error: %s\n", err)
-		return 1
-	}
-
+func gcF(ctx context.Context, opts struct {
+	DryRun bool `short:"T" long:"dry-run" description:"output packages that would be removed"`
+	Min    bool `short:"m" long:"outdated" description:"remove out-dated packages only"`
+}) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	col, err := gc.NewCollector(cfg.DataDir)
 
 	var toKeep []string
 
-	if *min {
+	if opts.Min {
 		toKeep, err = col.MarkMinimal(cfg)
 	} else {
 		toKeep, err = col.Mark()
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	if *gp {
+	if opts.DryRun {
 		fmt.Println("## Packages Kept")
 		for _, p := range toKeep {
 			fmt.Println(p)
@@ -537,16 +446,16 @@ func (i *gcCmd) Run(args []string) int {
 
 		total, err := col.DiskUsage(toKeep)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		sz, unit := humanize.Size(total)
 
 		fmt.Printf("=> Disk Usage: %.2f%s\n", sz, unit)
 
-		toRemove, err := col.SweepUnmarked(toKeep)
+		toRemove, err := col.SweepUnmarked(ctx, toKeep)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		fmt.Println("\n## Packages Removed")
@@ -556,19 +465,19 @@ func (i *gcCmd) Run(args []string) int {
 
 		total, err = col.DiskUsage(toRemove)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		sz, unit = humanize.Size(total)
 
 		fmt.Printf("=> Disk Usage: %.2f%s\n", sz, unit)
 
-		return 0
+		return nil
 	}
 
 	total, err := col.DiskUsage(toKeep)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	sz, unit := humanize.Size(total)
@@ -578,9 +487,9 @@ func (i *gcCmd) Run(args []string) int {
 		fmt.Println(p)
 	}
 
-	res, err := col.SweepAndRemove(toKeep)
+	res, err := col.SweepAndRemove(ctx, toKeep)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	sz, unit = humanize.Size(res.BytesRecovered)
@@ -588,5 +497,5 @@ func (i *gcCmd) Run(args []string) int {
 	fmt.Printf("\nSpace Recovered: %.2f%s\n", sz, unit)
 	fmt.Printf("  Files Removed: %d\n", res.EntriesRemoved)
 
-	return 0
+	return nil
 }

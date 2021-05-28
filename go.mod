@@ -13,6 +13,7 @@ require (
 	github.com/hashicorp/go-getter v1.5.3
 	github.com/hashicorp/go-hclog v0.16.0
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
+	github.com/jessevdk/go-flags v1.5.0 // indirect
 	github.com/jmespath/go-jmespath v0.0.0-20160803190731-bd40a432e4c7 // indirect
 	github.com/klauspost/compress v1.12.2 // indirect
 	github.com/lab47/exprcore v0.0.0-20210226035030-9b644201f87c
