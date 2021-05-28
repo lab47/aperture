@@ -271,8 +271,8 @@ func (c *Collector) removePackage(name string, sr *SweepResult) error {
 			return err
 		}
 
-		if info.Mode().Perm()&0600 == 0 {
-			err = os.Chmod(path, info.Mode().Perm()|0600)
+		if info.Mode().Perm()&0200 == 0 {
+			err = os.Chmod(path, info.Mode().Perm()|0200)
 			if err != nil {
 				return err
 			}
