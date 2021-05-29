@@ -195,7 +195,7 @@ type sigData struct {
 	Name         string
 	Version      string
 	Constraints  map[string]string
-	Instances    []*sigDataInstance
+	Instances    map[string]struct{}
 	FuncSig      string
 	Dependencies map[string]struct{}
 }
@@ -226,12 +226,11 @@ func (s *ScriptCalcSig) calcSig(
 
 		s.Instances = instances
 
+		sd.Instances = map[string]struct{}{}
+
 		for _, i := range instances {
-			sd.Instances = append(sd.Instances, &sigDataInstance{
-				Name:      i.Name,
-				Version:   i.Version,
-				Signature: i.Signature,
-			})
+			val := fmt.Sprintf("%s-%s-%s", i.Name, i.Version, i.Signature)
+			sd.Instances[val] = struct{}{}
 		}
 	}
 
