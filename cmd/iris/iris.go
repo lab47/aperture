@@ -199,7 +199,12 @@ func installF(ctx context.Context, opts struct {
 		}
 	}
 
-	err = prof.Commit()
+	if opts.Pos.Package != "" {
+		err = prof.Add()
+	} else {
+		err = prof.Commit()
+	}
+
 	if err != nil {
 		return err
 	}

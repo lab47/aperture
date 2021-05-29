@@ -70,6 +70,19 @@ func (p *Profile) linkOne(id string, root string) error {
 	return os.Symlink(root, tgt)
 }
 
+// Add adds any requested links to the profile, it does not
+// prune out entries like Commit.
+func (p *Profile) Add() error {
+	for _, ch := range p.changes {
+		err := p.linkOne(ch.id, ch.path)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (p *Profile) Commit() error {
 	known := map[string]struct{}{}
 
