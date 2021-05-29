@@ -78,6 +78,7 @@ func (p *PackageWriteInfo) Write(pkg *ScriptPackage) (*data.PackageInfo, error) 
 		Name:        pkg.Name(),
 		Version:     pkg.Version(),
 		Repo:        pkg.Repo(),
+		DeclDeps:    pkg.DependencyNames(),
 		RuntimeDeps: depIds,
 		BuildDeps:   buildDeps,
 		Constraints: pkg.Constraints(),

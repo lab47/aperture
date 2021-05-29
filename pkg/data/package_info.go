@@ -14,6 +14,7 @@ type PackageInfo struct {
 	Name        string            `json:"name"`
 	Version     string            `json:"version"`
 	Repo        string            `json:"repo"`
+	DeclDeps    []string          `json:"declared_deps"`
 	RuntimeDeps []string          `json:"runtime_deps"`
 	BuildDeps   []string          `json:"build_deps"`
 	Constraints map[string]string `json:"constraints"`
