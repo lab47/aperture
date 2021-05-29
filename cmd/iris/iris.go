@@ -70,6 +70,14 @@ func main() {
 				gcF,
 			), nil
 		},
+		"debug": func() (cli.Command, error) {
+			return cmd.New(
+				"debug",
+				"Debug various things",
+				debugF,
+			), nil
+
+		},
 	}
 
 	exitStatus, err := c.Run()
@@ -505,4 +513,29 @@ func gcF(ctx context.Context, opts struct {
 	fmt.Printf("  Files Removed: %d\n", res.EntriesRemoved)
 
 	return nil
+}
+
+func debugF(ctx context.Context, opts struct {
+	Script string `short:"s" long:"script" description:"output info about a script"`
+}) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	if opts.Script != "" {
+		var cl ops.ProjectLoad
+
+		proj, err := cl.Single(cfg, opts.Script)
+		if err != nil {
+			return err
+		}
+
+		for _, i := range proj.Install {
+			fmt.Println(i.ID(), i.Name(), i.Version())
+		}
+	}
+
+	return nil
+
 }
