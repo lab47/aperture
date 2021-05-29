@@ -339,7 +339,7 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 	tw := tabwriter.NewWriter(os.Stdout, 2, 2, 1, ' ', 0)
 	defer tw.Flush()
 
-	fmt.Fprintf(tw, "NAME\tVERSION\tSTATUS\tDEPENDENCIES\n")
+	fmt.Fprintf(tw, "ID\tNAME\tVERSION\tSTATUS\tDEPENDENCIES\n")
 
 	for _, p := range toInstall.InstallOrder {
 		flag := " "
@@ -367,7 +367,7 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 			continue
 		}
 
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", script.Name(), script.Version(), flag, deps)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", script.ID()[:8], script.Name(), script.Version(), flag, deps)
 	}
 
 	res, err := p.Resolve()
