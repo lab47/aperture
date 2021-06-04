@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/stream"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
 	pb "github.com/schollz/progressbar/v3"
 	"lab47.dev/aperture/pkg/data"
@@ -31,42 +32,52 @@ type CarPublish struct {
 	Password string
 }
 
-func (c *CarPublish) getInfo(path string) (*data.CarInfo, error) {
+func (c *CarPublish) getInfo(path string) (*data.CarInfo, []byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	defer f.Close()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	tr := tar.NewReader(gz)
 
+	var (
+		info data.CarInfo
+		sig  []byte
+	)
+
 	for {
 		hdr, err := tr.Next()
 		if err != nil {
-			return nil, err
+			break
 		}
 
 		if hdr.Name == CarInfoJson {
-			var info data.CarInfo
-
 			err = json.NewDecoder(tr).Decode(&info)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
+		}
 
-			return &info, nil
+		if hdr.Name == SignatureEntry {
+			sig, err = io.ReadAll(tr)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 	}
+
+	return &info, sig, nil
 }
 
 func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {
-	info, err := c.getInfo(path)
+	info, sig, err := c.getInfo(path)
 	if err != nil {
 		return err
 	}
@@ -137,6 +148,11 @@ func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {
 		source = "https://" + info.Repo
 	}
 
+	infoData, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+
 	man.Annotations = map[string]string{
 		"com.github.package.type":              "aperture-package",
 		"org.opencontainers.image.description": "Aperture Package",
@@ -146,7 +162,10 @@ func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {
 		"org.opencontainers.image.title":       info.Name + "-" + info.Version,
 		"org.opencontainers.image.vendor":      "lab47",
 		"org.opencontainers.image.version":     info.Version,
+		"dev.lab47.car.info":                   string(infoData),
+		"dev.lab47.car.signature":              base58.Encode(sig),
 	}
+
 	man.Config.Digest = h
 	man.Config.MediaType = types.OCIConfigJSON
 	man.Config.Size = n
@@ -158,6 +177,8 @@ func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {
 
 	img.manifest = &man
 	img.manifestData = data
+
+	fmt.Printf("Uploading %s (%s)\n", info.ID, base58.Encode(sig))
 
 	u := make(chan v1.Update, 1)
 

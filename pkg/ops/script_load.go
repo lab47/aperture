@@ -17,6 +17,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"lab47.dev/aperture/pkg/data"
+	"lab47.dev/aperture/pkg/repo"
 )
 
 type ScriptLoad struct {
@@ -62,11 +63,11 @@ func loadedKey(name, ns string, args map[string]string, path string) string {
 type ScriptPackage struct {
 	loader *ScriptLoad
 
-	name      string
-	id        string
-	sig       string
-	repo      string
-	prototype *exprcore.Prototype
+	requestName string
+	id          string
+	sig         string
+	repo        string
+	prototype   *exprcore.Prototype
 
 	cs ScriptCalcSig
 
@@ -78,10 +79,12 @@ type ScriptPackage struct {
 	PackageInfo *data.PackageInfo
 
 	Instance *Instance
+
+	repoConfig repo.Repo
 }
 
 func (s *ScriptPackage) Name() string {
-	return s.name
+	return s.cs.Name
 }
 
 func (s *ScriptPackage) Version() string {
@@ -91,7 +94,7 @@ func (s *ScriptPackage) Version() string {
 // String returns the string representation of the value.
 // exprcore string values are quoted as if by Python's repr.
 func (s *ScriptPackage) String() string {
-	return fmt.Sprintf("<script: %s>", s.name)
+	return fmt.Sprintf("<script: %s>", s.requestName)
 }
 
 // Type returns a short string describing the value's type.
@@ -133,6 +136,10 @@ func (s *ScriptPackage) Repo() string {
 	return s.repo
 }
 
+func (s *ScriptPackage) RepoConfig() repo.Repo {
+	return s.repoConfig
+}
+
 func (s *ScriptPackage) Constraints() map[string]string {
 	return s.constraints
 }
@@ -147,7 +154,7 @@ func (s *ScriptPackage) DependencyNames() []string {
 	var out []string
 
 	for _, c := range s.cs.Dependencies {
-		out = append(out, c.name)
+		out = append(out, c.requestName)
 	}
 
 	return out
@@ -327,15 +334,16 @@ func (s *ScriptLoad) Load(name string, opts ...Option) (*ScriptPackage, error) {
 
 	ppkg, ok := pkgval.(*exprcore.Prototype)
 	if !ok {
-		return nil, errors.Wrapf(ErrBadScript, "script did not return an object")
+		return nil, errors.Wrapf(ErrBadScript, "script '%s' did not return an object: %T", name, ppkg)
 	}
 
 	sp = &ScriptPackage{
-		name:        name,
+		requestName: name,
 		repo:        data.Repo(),
 		loader:      s,
 		constraints: lc.constraints,
 		prototype:   ppkg,
+		repoConfig:  data.RepoConfig(),
 	}
 
 	s.loaded[cacheKey] = sp
@@ -375,7 +383,7 @@ func ProcessPrototype(pkgval exprcore.Value, constraints map[string]string) (*Sc
 
 	sp.sig = sig
 	sp.id = id
-	sp.name = sp.cs.Name
+	sp.requestName = sp.cs.Name
 
 	return sp, nil
 }

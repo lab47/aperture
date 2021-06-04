@@ -3,7 +3,6 @@ package ops
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/pkg/errors"
@@ -29,11 +28,13 @@ type PackageInfo interface {
 }
 
 type InstallCar struct {
+	common
 	data *CarData
 }
 
 func (i *InstallCar) Install(ctx context.Context, ienv *InstallEnv) error {
-	return nil
+	fmt.Printf("Installing car for %s...\n", i.data.info.ID)
+	return i.data.Unpack(ctx, filepath.Join(ienv.StoreDir, i.data.info.ID))
 }
 
 type PackagesToInstall struct {
@@ -44,25 +45,12 @@ type PackagesToInstall struct {
 	Scripts      map[string]*ScriptPackage
 	Installed    map[string]bool
 	InstallDirs  map[string]string
+	CarInfo      map[string]*data.CarInfo
 }
 
-func (p *PackageCalcInstall) isInstalled(id string) (bool, error) {
-	if p.StoreDir == "" {
-		return false, nil
-	}
-
-	path := filepath.Join(p.StoreDir, id, ".pkg-info.json")
-
-	_, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return true, nil
+func (p *PackageCalcInstall) isInstalled(id string) (string, error) {
+	sf := StoreFind{StoreDir: p.StoreDir}
+	return sf.Find(id)
 }
 
 func (p *PackageCalcInstall) consider(
@@ -70,64 +58,96 @@ func (p *PackageCalcInstall) consider(
 	pti *PackagesToInstall,
 	seen map[string]int,
 ) error {
-	installed, err := p.isInstalled(pkg.ID())
+	installPath, err := p.isInstalled(pkg.ID())
 	if err != nil {
 		return err
 	}
 
-	pti.PackageIDs = append(pti.PackageIDs, pkg.ID())
+	var installed bool
 
-	if p.carLookup != nil && pkg.Repo() != "" {
-		carData, err := p.carLookup.Lookup(pkg.Repo(), pkg.ID())
+	if installPath != "" {
+		installed = true
+		pti.InstallDirs[pkg.ID()] = installPath
+
+		var pri PackageReadInfo
+		pri.StoreDir = p.StoreDir
+
+		_, err := pri.ReadPath(pkg, installPath)
 		if err != nil {
-			return errors.Wrapf(err, "error looking up car: %s/%s", pkg.Repo(), pkg.ID())
-		}
-
-		if carData != nil {
-			var skip bool
-
-			carInfo, err := carData.Info()
-			if err != nil {
-				if err == NoCarData {
-					skip = true
-				} else {
-					return errors.Wrapf(err, "error looking up car info: %s/%s", pkg.Repo(), pkg.ID())
-				}
-			}
-
-			if !skip {
-				pti.Installers[pkg.ID()] = &InstallCar{
-					data: carData,
-				}
-
-				for _, cdep := range carInfo.Dependencies {
-					pti.Dependencies[pkg.ID()] = append(pti.Dependencies[pkg.ID()], cdep.ID)
-
-					if _, ok := seen[cdep.ID]; ok {
-						seen[cdep.ID]++
-						continue
-					}
-
-					seen[cdep.ID] = 1
-
-					err = p.considerCarDep(cdep, pti, seen)
-					if err != nil {
-						return err
-					}
-				}
-				return nil
-			}
+			return err
 		}
 	}
 
-	if !installed {
-		pti.Installers[pkg.ID()] = &ScriptInstall{common: p.common, pkg: pkg}
-	}
+	pti.PackageIDs = append(pti.PackageIDs, pkg.ID())
 
 	pti.Installed[pkg.ID()] = installed
 	pti.Scripts[pkg.ID()] = pkg
 
-	for _, dep := range pkg.Dependencies() {
+	var carData *CarData
+
+	deps := pkg.Dependencies()
+
+	if !installed {
+		if p.carLookup != nil {
+			carData, err = p.carLookup.Lookup(pkg)
+			if err != nil {
+				p.L().Debug("error attempting to lookup car", "error", err, "id", pkg.ID())
+			}
+		}
+
+		if carData != nil {
+			info, err := carData.Info()
+			if err != nil {
+				return err
+			}
+
+			pti.CarInfo[pkg.ID()] = info
+			pti.Installers[pkg.ID()] = &InstallCar{common: p.common, data: carData}
+
+			var pruned []*ScriptPackage
+
+			set := map[string]struct{}{}
+
+			for _, dep := range info.Dependencies {
+				set[dep.ID] = struct{}{}
+			}
+
+			for _, dep := range deps {
+				if _, ok := set[dep.ID()]; ok {
+					pruned = append(pruned, dep)
+				}
+			}
+
+			deps = pruned
+		} else {
+			pti.Installers[pkg.ID()] = &ScriptInstall{common: p.common, pkg: pkg}
+
+			for _, dep := range pkg.cs.Instances {
+				pti.Dependencies[pkg.ID()] = append(pti.Dependencies[pkg.ID()], dep.ID())
+				if _, ok := seen[dep.ID()]; ok {
+					seen[dep.ID()]++
+					continue
+				}
+
+				seen[dep.ID()] = 1
+
+				sp := &ScriptPackage{
+					id:       dep.ID(),
+					Instance: dep,
+				}
+
+				sp.cs.Dependencies = dep.Dependencies
+				sp.cs.Install = dep.Fn
+
+				err = p.consider(sp, pti, seen)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	for _, dep := range deps {
 		pti.Dependencies[pkg.ID()] = append(pti.Dependencies[pkg.ID()], dep.ID())
 
 		if _, ok := seen[dep.ID()]; ok {
@@ -138,84 +158,6 @@ func (p *PackageCalcInstall) consider(
 		seen[dep.ID()] = 1
 
 		err = p.consider(dep, pti, seen)
-		if err != nil {
-			return err
-		}
-	}
-
-	if !installed {
-		for _, dep := range pkg.cs.Instances {
-			pti.Dependencies[pkg.ID()] = append(pti.Dependencies[pkg.ID()], dep.ID())
-			if _, ok := seen[dep.ID()]; ok {
-				seen[dep.ID()]++
-				continue
-			}
-
-			seen[dep.ID()] = 1
-
-			sp := &ScriptPackage{
-				id:       dep.ID(),
-				Instance: dep,
-			}
-
-			sp.cs.Dependencies = dep.Dependencies
-			sp.cs.Install = dep.Fn
-
-			err = p.consider(sp, pti, seen)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-func (p *PackageCalcInstall) considerCarDep(
-	car *data.CarDependency,
-	pti *PackagesToInstall,
-	seen map[string]int,
-) error {
-	installed, err := p.isInstalled(car.ID)
-	if err != nil {
-		return err
-	}
-
-	if installed {
-		return nil
-	}
-
-	pti.PackageIDs = append(pti.PackageIDs, car.ID)
-
-	carData, err := p.carLookup.Lookup(car.Repo, car.ID)
-	if err != nil {
-		return err
-	}
-
-	if carData == nil {
-		return fmt.Errorf("cars can only depend on other cars, but missing: %s/%s", car.Repo, car.ID)
-	}
-
-	pti.Installers[car.ID] = &InstallCar{
-		data: carData,
-	}
-
-	carInfo, err := carData.Info()
-	if err != nil {
-		return errors.Wrapf(err, "fetching car info: %s/%s", car.Repo, car.ID)
-	}
-
-	for _, cdep := range carInfo.Dependencies {
-		pti.Dependencies[car.ID] = append(pti.Dependencies[car.ID], cdep.ID)
-
-		if _, ok := seen[cdep.ID]; ok {
-			seen[cdep.ID]++
-			continue
-		}
-
-		seen[cdep.ID] = 1
-
-		err = p.considerCarDep(cdep, pti, seen)
 		if err != nil {
 			return err
 		}
@@ -234,6 +176,8 @@ func (p *PackageCalcInstall) CalculateSet(pkgs []*ScriptPackage) (*PackagesToIns
 	pti.Dependencies = make(map[string][]string)
 	pti.Scripts = make(map[string]*ScriptPackage)
 	pti.Installed = make(map[string]bool)
+	pti.InstallDirs = make(map[string]string)
+	pti.CarInfo = make(map[string]*data.CarInfo)
 
 	seen := map[string]int{}
 	for _, pkg := range pkgs {

@@ -1,6 +1,8 @@
 package ops
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,9 +12,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/pkg/errors"
 	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/metadata"
+	"lab47.dev/aperture/pkg/ociutil"
 )
 
 var NoCarData = errors.New("no car data found")
@@ -30,6 +37,9 @@ type CarLookup struct {
 type CarData struct {
 	name string
 	r    CarReader
+
+	info *data.CarInfo
+	img  v1.Image
 }
 
 func (r *CarData) Open() (io.ReadCloser, error) {
@@ -37,10 +47,79 @@ func (r *CarData) Open() (io.ReadCloser, error) {
 }
 
 func (r *CarData) Info() (*data.CarInfo, error) {
-	return r.r.Info(r.name)
+	return r.info, nil
 }
 
-func (c *CarLookup) Lookup(repo, name string) (*CarData, error) {
+func (r *CarData) Unpack(ctx context.Context, dir string) error {
+	cInfo, err := ociutil.WriteDir(r.img, dir)
+	if err != nil {
+		return err
+	}
+
+	if r.info.ID != cInfo.ID {
+		return fmt.Errorf("manifest has different info that car file")
+	}
+
+	return nil
+}
+
+func (c *CarLookup) Lookup(pkg *ScriptPackage) (*CarData, error) {
+	repo := pkg.RepoConfig()
+	if repo == nil {
+		return nil, nil
+	}
+
+	cfg, err := repo.Config()
+	if err != nil {
+		return nil, err
+	}
+
+	id := pkg.ID()
+
+	target := fmt.Sprintf("%s:%s", cfg.OCIRoot, id)
+
+	spew.Dump(repo)
+	spew.Dump(target)
+
+	ref, err := name.ParseReference(target)
+	if err != nil {
+		return nil, err
+	}
+
+	desc, err := remote.Get(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	man, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
+	if err != nil {
+		return nil, err
+	}
+
+	var info data.CarInfo
+
+	infoData, ok := man.Annotations["dev.lab47.car.info"]
+	if !ok {
+		return nil, fmt.Errorf("bad car detected, no info in annotations")
+	}
+
+	err = json.Unmarshal([]byte(infoData), &info)
+	if err != nil {
+		return nil, err
+	}
+
+	img, err := desc.Image()
+	if err != nil {
+		return nil, err
+	}
+
+	return &CarData{
+		info: &info,
+		img:  img,
+	}, nil
+}
+
+func (c *CarLookup) LookupByName(repo, name string) (*CarData, error) {
 	cr, ok := c.overrides[repo]
 	if ok {
 		return &CarData{
@@ -111,7 +190,7 @@ func (c *CarLookup) checkVanity(repo, name string) (*CarData, error) {
 
 	for _, i := range imports {
 		if i.Prefix == repo {
-			return c.Lookup(i.RepoRoot, name)
+			return c.LookupByName(i.RepoRoot, name)
 		}
 	}
 

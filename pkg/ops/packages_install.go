@@ -26,13 +26,23 @@ func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInsta
 		toInstall.InstallDirs = map[string]string{}
 	}
 
-	for _, id := range toInstall.InstallOrder {
-		storeDir := filepath.Join(p.ienv.StoreDir, id)
-		toInstall.InstallDirs[id] = storeDir
+	if ienv.PackagePaths == nil {
+		ienv.PackagePaths = map[string]string{}
+	}
 
+	for n, path := range toInstall.InstallDirs {
+		ienv.PackagePaths[n] = path
+	}
+
+	for _, id := range toInstall.InstallOrder {
 		if toInstall.Installed[id] {
 			continue
 		}
+
+		storeDir := filepath.Join(p.ienv.StoreDir, id)
+		toInstall.InstallDirs[id] = storeDir
+
+		ienv.PackagePaths[id] = storeDir
 
 		fn, ok := toInstall.Installers[id]
 		if !ok {

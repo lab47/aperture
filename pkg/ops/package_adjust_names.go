@@ -9,6 +9,7 @@ import (
 )
 
 type PackageAdjustNames struct {
+	common
 }
 
 func (p *PackageAdjustNames) Adjust(dir string) error {
@@ -42,14 +43,36 @@ func (p *PackageAdjustNames) Adjust(dir string) error {
 			return nil
 		}
 
-		if mf.Type != macho.TypeDylib {
-			return nil
+		if mf.Type == macho.TypeDylib {
+			c := exec.Command("install_name_tool", "-id", path, path)
+			_, err = c.Output()
+			if err != nil {
+				return err
+			}
 		}
 
-		c := exec.Command("install_name_tool", "-id", path, path)
-		_, err = c.Output()
+		libs, err := mf.ImportedLibraries()
 		if err != nil {
 			return err
+		}
+
+		for _, lib := range libs {
+			if filepath.IsAbs(lib) {
+				continue
+			}
+
+			relative := filepath.Join(filepath.Dir(path), lib)
+			if _, err := os.Stat(relative); err == nil {
+				newLib := "@loader_path/" + lib
+
+				p.common.L().Debug("changing library", "library", path, "old", lib, "new", newLib)
+
+				c := exec.Command("install_name_tool", "-change", lib, newLib, path)
+				_, err = c.Output()
+				if err != nil {
+					return err
+				}
+			}
 		}
 
 		return nil

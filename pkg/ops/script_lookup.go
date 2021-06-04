@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+
+	"lab47.dev/aperture/pkg/repo"
 )
 
 // xcr == exprcore files
@@ -30,12 +33,15 @@ type ScriptLookup struct {
 	Path []string
 
 	repoDetect RepoDetect
+
+	repoConfig map[string]repo.Repo
 }
 
 type ScriptData interface {
 	Script() []byte
 	Asset(name string) ([]byte, error)
 	Repo() string
+	RepoConfig() repo.Repo
 }
 
 type dirScriptData struct {
@@ -43,6 +49,8 @@ type dirScriptData struct {
 
 	repo string
 	dir  string
+
+	cfg repo.Repo
 }
 
 func (s *dirScriptData) Script() []byte {
@@ -53,11 +61,15 @@ func (s *dirScriptData) Repo() string {
 	return s.repo
 }
 
+func (s *dirScriptData) RepoConfig() repo.Repo {
+	return s.cfg
+}
+
 func (s *dirScriptData) Asset(name string) ([]byte, error) {
 	return ioutil.ReadFile(filepath.Join(s.dir, name))
 }
 
-func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
+func (s *ScriptLookup) lookupInDir(root, dir, name string) (ScriptData, error) {
 	var short string
 
 	if len(name) > 2 {
@@ -95,12 +107,71 @@ func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
 		s.L().Trace("load-dir", "path", x.path)
 		data, err := ioutil.ReadFile(x.path)
 		if err == nil {
-			repo, err := s.repoDetect.Detect(dir)
+			rname, err := s.repoDetect.Detect(dir)
 			if err != nil {
 				panic(err)
 			}
-			return &dirScriptData{data: data, dir: x.dir, repo: repo}, nil
+
+			cfg, ok := s.repoConfig[rname]
+			if !ok {
+				cfg, err = repo.Open(root)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			return &dirScriptData{data: data, dir: x.dir, repo: rname, cfg: cfg}, nil
 		}
+	}
+
+	return nil, ErrNotFound
+}
+
+func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
+	data, err := s.lookupInDir(dir, dir, name)
+	if err == nil {
+		return data, nil
+	}
+
+	// Check for any vendored dirs and the search inside them.
+	// If a script in a vendored dir does an import, we'll consider this toplevel
+	// first before trying the vendored dirs. This allows vendors to contain
+	// more generic scripts that smoothly interact with more specific ones at
+	// the higher level.
+
+	vendor := filepath.Join(dir, "vendor")
+
+	if fi, err := os.Stat(vendor); err == nil && fi.IsDir() {
+		vendored, err := os.ReadDir(vendor)
+		if err != nil {
+			return nil, ErrNotFound
+		}
+
+		for _, fi := range vendored {
+			if !fi.IsDir() {
+				continue
+			}
+
+			data, err := s.lookupInDir(dir, filepath.Join(vendor, fi.Name()), name)
+			if err == nil {
+				return data, nil
+			}
+		}
+	}
+
+	return nil, ErrNotFound
+}
+
+func (s *ScriptLookup) LoadFile(path string) (ScriptData, error) {
+	dir := filepath.Dir(path)
+
+	data, err := ioutil.ReadFile(path)
+	if err == nil {
+		repo, err := s.repoDetect.Detect(dir)
+		if err != nil {
+			panic(err)
+		}
+		return &dirScriptData{data: data, dir: dir, repo: repo}, nil
 	}
 
 	return nil, ErrNotFound
@@ -120,6 +191,10 @@ func (s *ghScriptData) Script() []byte {
 
 func (s *ghScriptData) Repo() string {
 	return s.base
+}
+
+func (s *ghScriptData) RepoConfig() repo.Repo {
+	return nil
 }
 
 func (s *ghScriptData) Asset(name string) ([]byte, error) {
@@ -282,6 +357,11 @@ func (s *ScriptLookup) Load(name string) (ScriptData, error) {
 
 func (s *ScriptLookup) loadGeneric(p, name string) (ScriptData, error) {
 	switch {
+	case strings.HasPrefix(name, "./"):
+		r, err := s.LoadFile(name)
+		if err == nil {
+			return r, nil
+		}
 	case strings.HasPrefix(p, "./"):
 		r, err := s.LoadDir(p, name)
 		if err == nil {

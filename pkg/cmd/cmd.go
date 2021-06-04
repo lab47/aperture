@@ -91,7 +91,7 @@ func (w *Cmd) Run(args []string) int {
 
 	if err, ok := rets[0].Interface().(error); ok {
 		if err != nil {
-			fmt.Printf("! Error: %s\n", err)
+			fmt.Printf("! Error: %+v\n", err)
 			return 1
 		}
 	}

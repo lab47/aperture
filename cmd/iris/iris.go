@@ -1,25 +1,37 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"debug/macho"
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/hashicorp/go-hclog"
 	"github.com/mitchellh/cli"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 	"lab47.dev/aperture/pkg/cmd"
 	"lab47.dev/aperture/pkg/config"
+	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/direnv"
 	"lab47.dev/aperture/pkg/gc"
 	"lab47.dev/aperture/pkg/humanize"
 	"lab47.dev/aperture/pkg/lockfile"
+	"lab47.dev/aperture/pkg/ociutil"
 	"lab47.dev/aperture/pkg/ops"
 	"lab47.dev/aperture/pkg/profile"
 )
@@ -189,7 +201,7 @@ func installF(ctx context.Context, opts struct {
 		}
 
 		if opts.Publish {
-			return publishCars(ctx, cars)
+			return publishCars(ctx, cfg, cars)
 		}
 
 		return nil
@@ -226,14 +238,25 @@ func installF(ctx context.Context, opts struct {
 	return nil
 }
 
-func publishCars(ctx context.Context, cars []*ops.ExportedCar) error {
+func publishCars(ctx context.Context, cfg *config.Config, cars []*ops.ExportedCar) error {
 	var cp ops.CarPublish
 	cp.Username = os.Getenv("GITHUB_USER")
 	cp.Password = os.Getenv("GITHUB_TOKEN")
 
 	for _, car := range cars {
+		rc := car.Package.RepoConfig()
+		if rc == nil {
+			fmt.Printf("package missing repo config: %s\n", car.Package.Name())
+			continue
+		}
+
+		cfg, err := rc.Config()
+		if err != nil {
+			return err
+		}
+
 		fmt.Printf("Publishing %s\n", car.Path)
-		err := cp.PublishCar(ctx, car.Path, "ghcr.io/lab47/aperture-packages")
+		err = cp.PublishCar(ctx, car.Path, cfg.OCIRoot)
 		if err != nil {
 			return err
 		}
@@ -244,11 +267,23 @@ func publishCars(ctx context.Context, cars []*ops.ExportedCar) error {
 
 func shellF(ctx context.Context, opts struct {
 	DumpEnv bool     `short:"E" long:"dump-env" description:"dump updated env in direnv format"`
+	Setup   bool     `short:"s" long:"setup" description:"output shell code to eval to update the env"`
+	Global  bool     `short:"G" long:"global" description:"execute in the context of the global profile"`
 	Args    []string `positional-args:"yes"`
 }) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return err
+	}
+
+	if opts.Global {
+		if opts.Setup {
+			fmt.Printf("export PATH=%s/bin:%s\n", cfg.GlobalProfilePath(), os.Getenv("PATH"))
+			return nil
+		}
+
+		fmt.Println("only -s accepted with -G")
+		return nil
 	}
 
 	storeDir := cfg.StorePath()
@@ -307,6 +342,16 @@ func shellF(ctx context.Context, opts struct {
 	}
 
 	cleanup()
+
+	if opts.Setup {
+		updates := prof.UpdateEnv(os.Environ())
+
+		for _, u := range updates {
+			fmt.Println(u)
+		}
+
+		return nil
+	}
 
 	if opts.DumpEnv {
 		var w io.Writer
@@ -412,7 +457,7 @@ func publishCarF(ctx context.Context, opts struct {
 		return err
 	}
 
-	return publishCars(ctx, cars)
+	return publishCars(ctx, cfg, cars)
 }
 
 func envF(ctx context.Context, opts struct {
@@ -516,15 +561,36 @@ func gcF(ctx context.Context, opts struct {
 }
 
 func debugF(ctx context.Context, opts struct {
-	Script string `short:"s" long:"script" description:"output info about a script"`
+	Script      string `short:"s" long:"script" description:"output info about a script"`
+	TestInstall string `short:"t" long:"test" description:"install a script in a test env"`
+	Reuse       bool   `long:"reuse" description:"reuse any packages from the default store in test"`
+	TestDir     string `long:"test-dir" description:"use the given directory as the test dir" default:"iris-test"`
+	DryRun      bool   `long:"dry-run" description:"explain operations but don't do them"`
+	ScanLibs    string `long:"scan-libs" description:"scan a directory and output all linked libs"`
+	Shell       bool   `long:"shell" description:"run a shell before and after each install"`
+	Trace       bool   `long:"trace" description:"log in trace mode"`
+	ShowCar     string `short:"c" long:"car" description:"attempt to discover a car file for a script"`
+	ExtractCar  bool   `long:"extract" description:"extract the car as well as inspecting it"`
 }) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return err
 	}
 
+	level := hclog.Debug
+
+	if opts.Trace {
+		level = hclog.Trace
+	}
+
+	L := hclog.New(&hclog.LoggerOptions{
+		Name:  "iris-debug",
+		Level: level,
+	})
+
 	if opts.Script != "" {
 		var cl ops.ProjectLoad
+		cl.SetLogger(L)
 
 		proj, err := cl.Single(cfg, opts.Script)
 		if err != nil {
@@ -534,6 +600,206 @@ func debugF(ctx context.Context, opts struct {
 		for _, i := range proj.Install {
 			fmt.Println(i.ID(), i.Name(), i.Version())
 		}
+
+		return nil
+	}
+
+	if opts.TestInstall != "" {
+		var cl ops.ProjectLoad
+		cl.SetLogger(L)
+
+		name := opts.TestInstall
+
+		if _, err := os.Stat(opts.TestInstall); err == nil {
+			path := "./" + filepath.Clean(opts.TestInstall)
+
+			pathExtra, err := filepath.Abs(filepath.Dir(path))
+			if err != nil {
+				return err
+			}
+
+			cfg.Path = pathExtra + ":" + cfg.Path
+			name = path
+		}
+
+		fmt.Printf("Loading for test install: %s\n", name)
+		fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
+
+		proj, err := cl.Single(cfg, name)
+		if err != nil {
+			return err
+		}
+
+		root := opts.TestDir
+
+		fmt.Printf("Installing packages into: %s\n", root)
+
+		root, err = filepath.Abs(root)
+		if err != nil {
+			return err
+		}
+
+		ienv := &ops.InstallEnv{
+			BuildDir:    filepath.Join(root, "build"),
+			StoreDir:    filepath.Join(root, "install"),
+			RetainBuild: true,
+			StartShell:  opts.Shell,
+		}
+
+		err = proj.Explain(ctx, ienv)
+		if err != nil {
+			return err
+		}
+
+		if opts.DryRun {
+			return nil
+		}
+
+		err = os.MkdirAll(ienv.BuildDir, 0755)
+		if err != nil {
+			return err
+		}
+
+		err = os.MkdirAll(ienv.StoreDir, 0755)
+		if err != nil {
+			return err
+		}
+
+		_, _, err = proj.InstallPackages(ctx, ienv)
+		return err
+	}
+
+	if opts.ScanLibs != "" {
+		return filepath.Walk(opts.ScanLibs, func(path string, info fs.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if info.IsDir() {
+				return nil
+			}
+
+			if info.Mode().Perm()&0111 == 0 {
+				return nil
+			}
+
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+
+			mf, err := macho.NewFile(f)
+			if err != nil {
+				return nil
+			}
+
+			libs, err := mf.ImportedLibraries()
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("%s\t%s\n", path, strings.Join(libs, "  "))
+
+			return nil
+		})
+	}
+
+	if opts.ShowCar != "" {
+		var cl ops.ProjectLoad
+		cl.SetLogger(L)
+
+		pkgName := opts.ShowCar
+
+		if _, err := os.Stat(opts.ShowCar); err == nil {
+			path := "./" + filepath.Clean(opts.TestInstall)
+
+			pathExtra, err := filepath.Abs(filepath.Dir(path))
+			if err != nil {
+				return err
+			}
+
+			cfg.Path = pathExtra + ":" + cfg.Path
+			pkgName = path
+		}
+
+		fmt.Printf("Loading for test install: %s\n", pkgName)
+		fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
+
+		proj, err := cl.Single(cfg, pkgName)
+		if err != nil {
+			return err
+		}
+
+		pkg := proj.Install[0]
+
+		fmt.Printf("Attempting to resolve car for: %s\n", pkg.ID())
+
+		cfg, err := pkg.RepoConfig().Config()
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("OCI root: %s\n", cfg.OCIRoot)
+
+		target := fmt.Sprintf("%s:%s", cfg.OCIRoot, pkg.ID())
+
+		ref, err := name.ParseReference(target)
+		if err != nil {
+			return err
+		}
+
+		desc, err := remote.Get(ref)
+		if err != nil {
+			return err
+		}
+
+		L.Info("descriptor",
+			"type", desc.MediaType,
+			"platform", desc.Platform,
+			"digest", desc.Digest.String(),
+			"urls", desc.URLs,
+			"annotations", desc.Annotations,
+		)
+
+		man, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
+		if err != nil {
+			return err
+		}
+
+		var info data.CarInfo
+
+		infoData, ok := man.Annotations["dev.lab47.car.info"]
+		if !ok {
+			fmt.Printf("missing car info annotation\n")
+			return nil
+		}
+
+		err = json.Unmarshal([]byte(infoData), &info)
+		if err != nil {
+			return err
+		}
+
+		spew.Dump(info)
+
+		if opts.ExtractCar {
+			img, err := desc.Image()
+			if err != nil {
+				return err
+			}
+
+			dir := info.ID
+
+			cInfo, err := ociutil.WriteDir(img, dir)
+			if err != nil {
+				return err
+			}
+
+			if info.ID != cInfo.ID {
+				return fmt.Errorf("manifest has different info that car file")
+			}
+		}
+
+		return nil
 	}
 
 	return nil

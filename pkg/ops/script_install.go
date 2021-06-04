@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"io"
@@ -27,6 +29,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
 	"lab47.dev/aperture/pkg/cleanhttp"
+	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/evt"
 	"lab47.dev/aperture/pkg/fileutils"
 )
@@ -40,7 +43,12 @@ type ScriptInstall struct {
 func (i *ScriptInstall) setupInstance(ui *UI, ienv *InstallEnv, dir string, in ScriptInput) error {
 	var inst fileutils.Install
 
-	inst.Pattern = filepath.Join(ienv.StoreDir, in.Instance.ID())
+	depDir, ok := ienv.PackagePaths[in.Instance.ID()]
+	if !ok {
+		return fmt.Errorf("missing path to input instance: %s", in.Instance.ID())
+	}
+
+	inst.Pattern = depDir
 	inst.Dest = filepath.Join(dir, in.Name)
 	inst.ModeOr = os.FileMode(0222)
 
@@ -229,7 +237,9 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 	}
 
-	defer os.RemoveAll(buildDir)
+	if !ienv.RetainBuild {
+		defer os.RemoveAll(buildDir)
+	}
 
 	err = os.Mkdir(targetDir, 0755)
 	if err != nil {
@@ -288,6 +298,8 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 	}
 
+	log.SetLevel(hclog.Debug)
+
 	var rc RunCtx
 	rc.ctx = ctx
 	rc.L = log
@@ -304,7 +316,18 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		cflags    []string
 		ldflags   []string
 		pkgconfig []string
+
+		cmakePrefix []string
 	)
+
+	bi := &data.BuildInfo{
+		Name:         i.pkg.Name(),
+		Version:      i.pkg.Version(),
+		ID:           i.pkg.ID(),
+		Prefix:       targetDir,
+		BuildDir:     buildDir,
+		Dependencies: make(map[string]*data.BuildInfoDependency),
+	}
 
 	var scd ScriptCalcDeps
 	scd.storeDir = ienv.StoreDir
@@ -315,25 +338,44 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	}
 
 	for _, dep := range buildDeps {
-		path = append(path, filepath.Join(ienv.StoreDir, dep.ID(), "bin"))
+		depDir, ok := ienv.PackagePaths[dep.ID()]
+		if !ok {
+			return fmt.Errorf("missing path for dep: '%s'", dep.ID())
+		}
 
-		incpath := filepath.Join(ienv.StoreDir, dep.ID(), "include")
+		dr := &data.BuildInfoDependency{
+			Version:      dep.Version(),
+			ID:           dep.ID(),
+			Path:         depDir,
+			Dependencies: []string{},
+		}
+
+		for _, sub := range dep.Dependencies() {
+			dr.Dependencies = append(dr.Dependencies, sub.Name())
+		}
+
+		bi.Dependencies[dep.Name()] = dr
+
+		path = append(path, filepath.Join(depDir, "bin"))
+		cmakePrefix = append(cmakePrefix, depDir)
+
+		incpath := filepath.Join(depDir, "include")
 		if _, err := os.Stat(incpath); err == nil {
 			cflags = append(cflags, "-I"+incpath)
 		}
 
-		libpath := filepath.Join(ienv.StoreDir, dep.ID(), "lib")
+		libpath := filepath.Join(depDir, "lib")
 		if _, err := os.Stat(libpath); err == nil {
 			ldflags = append(ldflags, "-L"+libpath)
 
-			pcpath := filepath.Join(ienv.StoreDir, dep.ID(), "lib", "pkgconfig")
+			pcpath := filepath.Join(depDir, "lib", "pkgconfig")
 			if _, err := os.Stat(pcpath); err == nil {
 				pkgconfig = append(pkgconfig, pcpath)
 			}
 		}
 	}
 
-	path = append(path, "/bin", "/usr/bin")
+	path = append(path, "/bin", "/usr/bin", "/usr/sbin", "/sbin")
 
 	rc.path = strings.Join(path, ":")
 
@@ -351,6 +393,17 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		environ = append(environ, "PKG_CONFIG_PATH="+strings.Join(pkgconfig, ":"))
 	}
 
+	if len(cmakePrefix) > 0 {
+		environ = append(environ, "CMAKE_PREFIX_PATH="+strings.Join(cmakePrefix, ":"))
+	}
+
+	data, err := json.Marshal(bi)
+	if err != nil {
+		return errors.Wrapf(err, "serializing build info")
+	}
+
+	environ = append(environ, "APERTURE_BUILD_INFO="+base64.StdEncoding.EncodeToString(data))
+
 	rc.extraEnv = environ
 
 	ui.ListDepedencies(buildDeps)
@@ -361,7 +414,12 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 			continue
 		}
 
-		rc.installDir = filepath.Join(ienv.StoreDir, dep.ID())
+		depDir, ok := ienv.PackagePaths[dep.ID()]
+		if !ok {
+			return fmt.Errorf("missing path for dep: '%s'", dep.ID())
+		}
+
+		rc.installDir = depDir
 
 		_, err := exprcore.Call(&thread, hook, args, nil)
 		if err != nil {
@@ -399,6 +457,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		log.Error("error running script install", "error", err)
 	} else {
 		var pan PackageAdjustNames
+		pan.common = i.common
 
 		perr := pan.Adjust(targetDir)
 		if perr != nil {

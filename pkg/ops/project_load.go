@@ -36,6 +36,8 @@ type Installable interface {
 }
 
 type ProjectLoad struct {
+	common
+
 	lockFile *data.LockFile
 	path     []string
 
@@ -51,6 +53,8 @@ type ProjectLoad struct {
 }
 
 type Project struct {
+	common
+
 	Constraints map[string]string
 	Cellar      string
 	Install     []*ScriptPackage
@@ -242,8 +246,11 @@ func (l *LoadedPackage) Hash() (uint32, error) {
 
 func (l *ProjectLoad) loadScript(name string) (*ScriptPackage, error) {
 	var sl ScriptLoad
+	sl.common = l.common
+
 	sl.lookup = &ScriptLookup{
-		Path: l.path,
+		common: l.common,
+		Path:   l.path,
 	}
 
 	sl.StoreDir = l.storeDir
@@ -329,6 +336,11 @@ func (p *Project) Resolve() (*homebrew.Resolution, error) {
 
 func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 	var pci PackageCalcInstall
+	pci.common = p.common
+
+	var cl CarLookup
+	pci.carLookup = &cl
+
 	pci.StoreDir = ienv.StoreDir
 
 	toInstall, err := pci.CalculateSet(p.Install)
@@ -345,6 +357,10 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 		flag := " "
 		if toInstall.Installed[p] {
 			flag = "I"
+		} else {
+			if _, ok := toInstall.CarInfo[p]; ok {
+				flag = "C"
+			}
 		}
 
 		var shortDeps []string
@@ -388,11 +404,28 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 	return nil
 }
 
+func (p *Project) CalculateSet(ctx context.Context, ienv *InstallEnv) (*PackagesToInstall, error) {
+	var pci PackageCalcInstall
+	pci.StoreDir = ienv.StoreDir
+
+	var requested []string
+
+	for _, p := range p.Install {
+		requested = append(requested, p.ID())
+	}
+
+	return pci.CalculateSet(p.Install)
+}
+
 func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 	[]string, *PackagesToInstall, error,
 ) {
 	var pci PackageCalcInstall
+	pci.common = p.common
 	pci.StoreDir = ienv.StoreDir
+
+	var cl CarLookup
+	pci.carLookup = &cl
 
 	var requested []string
 
@@ -411,6 +444,7 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 	}
 
 	var pkgInst PackagesInstall
+	pkgInst.common = p.common
 
 	err = pkgInst.Install(ctx, ienv, toInstall)
 	if err != nil {
@@ -502,7 +536,7 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 	defer pb.Close()
 
 	for _, pkg := range pkgs {
-		pb.On(pkg.name)
+		pb.On(pkg.requestName)
 
 		pi, err := pri.Read(pkg)
 		if err != nil {

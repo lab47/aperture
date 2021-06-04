@@ -4,6 +4,7 @@ install(
   go,
   "protobuf",
   "ruby-26",
+  "libtool"
 )
 
 if platform.os == "darwin" {

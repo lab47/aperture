@@ -9,4 +9,10 @@ type InstallEnv struct {
 
 	// Start a shell
 	StartShell bool
+
+	// Contains paths to installed packages
+	PackagePaths map[string]string
+
+	// Indicates that the build process should retain the build dir
+	RetainBuild bool
 }

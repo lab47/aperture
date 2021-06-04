@@ -10,6 +10,7 @@ type RepoConfig struct {
 	Id           string   `json:"id"`
 	CarURLS      []string `json:"car_urls"`
 	RegistryPath string   `json:"registry_path"`
+	OCIRoot      string   `json:"oci"`
 }
 
 func (r *RepoConfig) CalculateCarURLs(name string) []string {

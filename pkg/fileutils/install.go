@@ -107,7 +107,7 @@ func (i *Install) copyEntry(from, to string) error {
 		return err
 	}
 
-	i.L.Debug("copy entry", "from", from, "to", to)
+	i.L.Trace("copy entry", "from", from, "to", to)
 
 	f, err := os.Open(from)
 	if err != nil {
