@@ -45,7 +45,9 @@ type ProjectLoad struct {
 
 	// cfg Config
 	// cfg *config.Config
-	storeDir string
+
+	cfg   *config.Config
+	store *config.Store
 
 	toInstall []*ScriptPackage
 
@@ -90,7 +92,7 @@ func (p *platform) AttrNames() []string {
 }
 
 func (c *ProjectLoad) Load(cfg *config.Config) (*Project, error) {
-	c.storeDir = cfg.StorePath()
+	c.store = cfg.Store()
 
 	var lf data.LockFile
 	f, err := os.Open("aperture-lock.json")
@@ -153,7 +155,7 @@ func (c *ProjectLoad) Load(cfg *config.Config) (*Project, error) {
 }
 
 func (c *ProjectLoad) Single(cfg *config.Config, name string) (*Project, error) {
-	c.storeDir = cfg.StorePath()
+	c.store = cfg.Store()
 
 	var lf data.LockFile
 	f, err := os.Open("aperture-lock.json")
@@ -253,7 +255,7 @@ func (l *ProjectLoad) loadScript(name string) (*ScriptPackage, error) {
 		Path:   l.path,
 	}
 
-	sl.StoreDir = l.storeDir
+	sl.Store = l.store
 
 	data, err := sl.Load(name, WithConstraints(l.constraints))
 	if err != nil {
@@ -341,7 +343,7 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 	var cl CarLookup
 	pci.carLookup = &cl
 
-	pci.StoreDir = ienv.StoreDir
+	pci.Store = ienv.Store
 
 	toInstall, err := pci.CalculateSet(p.Install)
 	if err != nil {
@@ -365,9 +367,9 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 
 		var shortDeps []string
 
-		pkg := toInstall.Scripts[p]
+		for _, id := range toInstall.Dependencies[p] {
+			scr := toInstall.Scripts[id]
 
-		for _, scr := range pkg.Dependencies() {
 			if scr == nil || scr.Name() == "" {
 				continue
 			}
@@ -406,7 +408,7 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 
 func (p *Project) CalculateSet(ctx context.Context, ienv *InstallEnv) (*PackagesToInstall, error) {
 	var pci PackageCalcInstall
-	pci.StoreDir = ienv.StoreDir
+	pci.Store = ienv.Store
 
 	var requested []string
 
@@ -422,7 +424,7 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 ) {
 	var pci PackageCalcInstall
 	pci.common = p.common
-	pci.StoreDir = ienv.StoreDir
+	pci.Store = ienv.Store
 
 	var cl CarLookup
 	pci.carLookup = &cl
@@ -438,7 +440,7 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 		return nil, nil, err
 	}
 
-	err = os.MkdirAll(ienv.StoreDir, 0755)
+	err = os.MkdirAll(ienv.Store.Default, 0755)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -481,7 +483,7 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 	if len(urls) > 0 {
 		var d homebrew.Downloader
 
-		hbtmp := filepath.Join(ienv.StoreDir, "_hb-cache")
+		hbtmp := filepath.Join(ienv.Store.Default, "_hb-cache")
 		err = os.MkdirAll(hbtmp, 0755)
 		if err != nil {
 			return nil, nil, err
@@ -518,10 +520,10 @@ type ExportedCar struct {
 
 func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) ([]*ExportedCar, error) {
 	var pri PackageReadInfo
-	pri.StoreDir = "/opt/iris/store"
+	pri.Store = cfg.Store()
 
 	var scd ScriptCalcDeps
-	scd.storeDir = pri.StoreDir
+	scd.store = cfg.Store()
 
 	infos := map[string]*data.CarDependency{}
 
@@ -587,7 +589,11 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 		cp.PrivateKey = cfg.Private()
 		cp.PublicKey = cfg.Public()
 
-		path := filepath.Join(pri.StoreDir, pkg.ID())
+		path, err := pri.Store.Locate(pkg.ID())
+		if err != nil {
+			return nil, err
+		}
+
 		err = cp.Pack(ci, path, f)
 		if err != nil {
 			return nil, err

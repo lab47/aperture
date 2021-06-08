@@ -160,6 +160,11 @@ func hashVal(v reflect.Value, h io.Writer) error {
 					continue
 				}
 
+				// Skip zero value fields entirely.
+				if innerV.IsZero() {
+					continue
+				}
+
 				eh, _ := blake2b.New256(nil)
 
 				err := hashVal(reflect.ValueOf(fieldType.Name), eh)

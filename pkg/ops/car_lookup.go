@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -77,9 +76,6 @@ func (c *CarLookup) Lookup(pkg *ScriptPackage) (*CarData, error) {
 	id := pkg.ID()
 
 	target := fmt.Sprintf("%s:%s", cfg.OCIRoot, id)
-
-	spew.Dump(repo)
-	spew.Dump(target)
 
 	ref, err := name.ParseReference(target)
 	if err != nil {

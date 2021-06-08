@@ -2,8 +2,9 @@ package ops
 
 import (
 	"context"
+	"fmt"
 	"os"
-	"path/filepath"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -34,12 +35,16 @@ func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInsta
 		ienv.PackagePaths[n] = path
 	}
 
-	for _, id := range toInstall.InstallOrder {
+	start := time.Now()
+
+	total := len(toInstall.InstallOrder)
+
+	for i, id := range toInstall.InstallOrder {
 		if toInstall.Installed[id] {
 			continue
 		}
 
-		storeDir := filepath.Join(p.ienv.StoreDir, id)
+		storeDir := p.ienv.Store.ExpectedPath(id)
 		toInstall.InstallDirs[id] = storeDir
 
 		ienv.PackagePaths[id] = storeDir
@@ -49,12 +54,17 @@ func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInsta
 			continue
 		}
 
+		fmt.Printf("Installing package %s (%d/%d) (elapse: %s)\n",
+			id, i+1, total, time.Since(start))
+
 		p.L().Debug("running installer", "id", id)
 
 		err := fn.Install(ctx, p.ienv)
 		if err != nil {
 			p.Failed = id
-			os.RemoveAll(storeDir)
+			if !ienv.RetainBuild {
+				os.RemoveAll(storeDir)
+			}
 			return err
 		}
 

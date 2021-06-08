@@ -52,6 +52,8 @@ func (i *ScriptInstall) setupInstance(ui *UI, ienv *InstallEnv, dir string, in S
 	inst.Dest = filepath.Join(dir, in.Name)
 	inst.ModeOr = os.FileMode(0222)
 
+	i.L().Info("copying instance data", "source", depDir, "dest", inst.Dest)
+
 	return inst.Install()
 }
 
@@ -221,7 +223,13 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 
 	buildDir := filepath.Join(ienv.BuildDir, "build-"+i.pkg.ID())
 
-	targetDir := filepath.Join(ienv.StoreDir, i.pkg.ID())
+	targetDir := ienv.Store.ExpectedPath(i.pkg.ID())
+
+	stateDir := ienv.StateDir
+
+	if stateDir == "" {
+		stateDir = filepath.Join(ienv.Store.Default, "_state")
+	}
 
 	err := os.Mkdir(buildDir, 0755)
 	if err != nil {
@@ -253,6 +261,11 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	err = os.MkdirAll(stateDir, 0755)
+	if err != nil {
+		return err
 	}
 
 	err = i.setupInputs(ui, ienv, buildDir)
@@ -307,6 +320,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	rc.installDir = targetDir
 	rc.buildDir = runDir
 	rc.topDir = buildDir
+	rc.stateDir = stateDir
 	rc.outputPrefix = i.pkg.Name()
 
 	args := exprcore.Tuple{&rc}
@@ -330,11 +344,17 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	}
 
 	var scd ScriptCalcDeps
-	scd.storeDir = ienv.StoreDir
+	scd.store = ienv.Store
 
 	buildDeps, err := scd.BuildDeps(i.pkg)
 	if err != nil {
 		return err
+	}
+
+	buildSet := make(map[string]struct{})
+
+	for _, dep := range buildDeps {
+		buildSet[dep.ID()] = struct{}{}
 	}
 
 	for _, dep := range buildDeps {
@@ -351,7 +371,9 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 
 		for _, sub := range dep.Dependencies() {
-			dr.Dependencies = append(dr.Dependencies, sub.Name())
+			if _, ok := buildSet[sub.ID()]; ok {
+				dr.Dependencies = append(dr.Dependencies, sub.Name())
+			}
 		}
 
 		bi.Dependencies[dep.Name()] = dr
@@ -447,7 +469,9 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	}
 
 	if i.pkg.Instance != nil && i.pkg.Instance.Path != "" {
-		err = ioutil.WriteFile(rc.workPath(i.pkg.Instance.Path), i.pkg.Instance.Data, 0644)
+		path := rc.outPath(i.pkg.Instance.Path)
+		log.Info("writing data", "size", len(i.pkg.Instance.Data), "path", i.pkg.Instance.Path)
+		err = ioutil.WriteFile(path, i.pkg.Instance.Data, 0644)
 	} else {
 		rc.installDir = targetDir
 		_, err = exprcore.Call(&thread, i.pkg.cs.Install, args, nil)
@@ -456,28 +480,41 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	if err != nil {
 		log.Error("error running script install", "error", err)
 	} else {
-		var pan PackageAdjustNames
-		pan.common = i.common
+		if !ienv.SkipPostInstall {
+			log.Debug("executing post install")
 
-		perr := pan.Adjust(targetDir)
-		if perr != nil {
-			log.Error("Error adjusting library names", "error", perr)
+			if i.pkg.cs.PostInstall != nil {
+				rc.installDir = targetDir
+				_, err = exprcore.Call(&thread, i.pkg.cs.PostInstall, args, nil)
+			}
 		}
 
-		var pwi PackageWriteInfo
-		pwi.storeDir = ienv.StoreDir
+		if err != nil {
+			log.Error("error running script post_install", "error", err)
+		} else {
+			var pan PackageAdjustNames
+			pan.common = i.common
 
-		_, perr = pwi.Write(i.pkg)
-		if perr != nil {
-			log.Error("error writing package info", "error", perr)
-		}
+			perr := pan.Adjust(targetDir)
+			if perr != nil {
+				log.Error("Error adjusting library names", "error", perr)
+			}
 
-		var sf StoreFreeze
-		sf.storeDir = ienv.StoreDir
+			var pwi PackageWriteInfo
+			pwi.store = ienv.Store
 
-		perr = sf.Freeze(i.pkg.ID())
-		if perr != nil {
-			log.Error("error freezing store dir", "error", perr)
+			_, perr = pwi.Write(i.pkg)
+			if perr != nil {
+				log.Error("error writing package info", "error", perr)
+			}
+
+			var sf StoreFreeze
+			sf.store = ienv.Store
+
+			perr = sf.Freeze(i.pkg.ID())
+			if perr != nil {
+				log.Error("error freezing store dir", "error", perr)
+			}
 		}
 	}
 
@@ -506,6 +543,7 @@ type RunCtx struct {
 	ctx context.Context
 
 	installDir, buildDir, topDir string
+	stateDir                     string
 	extraEnv                     []string
 
 	// Used by system, so cached outside extraEnv
@@ -559,6 +597,8 @@ func (r *RunCtx) Attr(name string) (exprcore.Value, error) {
 		return exprcore.String(r.installDir), nil
 	case "build":
 		return exprcore.String(r.buildDir), nil
+	case "state_dir":
+		return exprcore.String(r.stateDir), nil
 	case "top":
 		return exprcore.String(r.topDir), nil
 	}
@@ -606,6 +646,7 @@ var RunCtxFunctions = exprcore.StringDict{
 	"mkdir":         exprcore.NewBuiltin("mkdir", mkdirFn),
 	"download":      exprcore.NewBuiltin("download", downloadFn),
 	"unpack":        exprcore.NewBuiltin("unpack", unpackFn),
+	"set_shebang":   exprcore.NewBuiltin("set_shebang", setShebangFn),
 }
 
 func addHash(rc *RunCtx, parts ...interface{}) (exprcore.Value, error) {
@@ -1654,6 +1695,11 @@ func writeFileFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tup
 
 	target = env.outPath(target)
 
+	err = os.MkdirAll(filepath.Dir(target), 0755)
+	if err != nil {
+		return nil, err
+	}
+
 	f, err := os.Create(target)
 	if err != nil {
 		return nil, err
@@ -1662,6 +1708,63 @@ func writeFileFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tup
 	defer f.Close()
 
 	_, err = f.WriteString(data)
+
+	return exprcore.None, err
+}
+
+func setShebangFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple, kwargs []exprcore.Tuple) (exprcore.Value, error) {
+	var (
+		target, shebang string
+	)
+
+	err := exprcore.UnpackArgs(
+		"set_shebang", args, kwargs,
+		"path", &target,
+		"shebang", &shebang,
+	)
+
+	if err != nil {
+		return exprcore.None, err
+	}
+
+	env, ok := b.Receiver().(*RunCtx)
+	if !ok {
+		return noRunRC(b.Receiver())
+	}
+
+	if env.h != nil {
+		return addHash(env, "write-file", "target", target, "data", shebang)
+	}
+
+	target = env.outPath(target)
+
+	data, err := ioutil.ReadFile(target)
+	if err != nil {
+		return nil, err
+	}
+
+	idx := bytes.IndexByte(data, '\n')
+	if idx == -1 {
+		return exprcore.None, nil
+	}
+
+	if !strings.HasPrefix(shebang, "#!") {
+		shebang = "$!" + shebang
+	}
+
+	f, err := os.Create(target)
+	if err != nil {
+		return nil, err
+	}
+
+	defer f.Close()
+
+	_, err = f.WriteString(shebang)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = f.Write(data[idx:])
 
 	return exprcore.None, err
 }

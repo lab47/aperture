@@ -5,10 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"lab47.dev/aperture/pkg/config"
 )
 
 type StoreFindDeps struct {
-	storeDir string
+	store *config.Store
 }
 
 func (s *StoreFindDeps) PruneDeps(id string, deps []*ScriptPackage) ([]*ScriptPackage, error) {
@@ -16,7 +18,12 @@ func (s *StoreFindDeps) PruneDeps(id string, deps []*ScriptPackage) ([]*ScriptPa
 
 	var trbuf bytes.Buffer
 
-	filepath.Walk(filepath.Join(s.storeDir, id), func(path string, info os.FileInfo, err error) error {
+	path, err := s.store.Locate(id)
+	if err != nil {
+		return nil, err
+	}
+
+	filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -32,13 +39,19 @@ func (s *StoreFindDeps) PruneDeps(id string, deps []*ScriptPackage) ([]*ScriptPa
 
 		defer f.Close()
 
-		var dr depDetect
-		dr.deps = seen
-		dr.file = path
-		dr.prefix = []byte(s.storeDir + "/")
-		dr.buf = &trbuf
+		var writers []io.Writer
 
-		io.Copy(&dr, f)
+		for _, path := range s.store.Paths {
+			var dr depDetect
+			dr.deps = seen
+			dr.file = path
+			dr.prefix = []byte(path + "/")
+			dr.buf = &trbuf
+
+			writers = append(writers, &dr)
+		}
+
+		io.Copy(io.MultiWriter(writers...), f)
 
 		return nil
 	})

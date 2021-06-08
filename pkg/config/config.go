@@ -36,6 +36,8 @@ type Config struct {
 	pubKey   ed25519.PublicKey
 	privKey  ed25519.PrivateKey
 
+	store *Store
+
 	// Actual Config
 	DataDir      string `json:"data-dir"`
 	Path         string `json:"aperture-path"`
@@ -282,6 +284,27 @@ func (c *Config) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (si
 
 func (c *Config) StorePath() string {
 	return filepath.Join(c.DataDir, "store")
+}
+
+func (c *Config) Store() *Store {
+	if c.store != nil {
+		return c.store
+	}
+
+	c.store = &Store{
+		Paths:   []string{c.StorePath()},
+		Default: c.StorePath(),
+	}
+
+	return c.store
+}
+
+func (c *Config) StatePath() string {
+	return filepath.Join(c.DataDir, "state")
+}
+
+func (c *Config) BuildPath() string {
+	return filepath.Join(c.DataDir, "build")
 }
 
 func (c *Config) RootsPath() string {

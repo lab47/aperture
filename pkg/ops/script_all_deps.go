@@ -1,14 +1,16 @@
 package ops
 
+import "lab47.dev/aperture/pkg/config"
+
 type ScriptCalcDeps struct {
-	storeDir string
+	store *config.Store
 }
 
 func (i *ScriptCalcDeps) pkgRuntimeDeps(pkg *ScriptPackage) ([]*ScriptPackage, error) {
 	runtimeDeps := pkg.Dependencies()
 
 	var pri PackageReadInfo
-	pri.StoreDir = i.storeDir
+	pri.Store = i.store
 
 	pi, err := pri.Read(pkg)
 	if err != nil {

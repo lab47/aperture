@@ -6,15 +6,21 @@ import (
 	"path/filepath"
 
 	"github.com/pkg/errors"
+	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
 )
 
 type PackageWriteInfo struct {
-	storeDir string
+	store *config.Store
 }
 
 func (p *PackageWriteInfo) Write(pkg *ScriptPackage) (*data.PackageInfo, error) {
-	path := filepath.Join(p.storeDir, pkg.ID(), ".pkg-info.json")
+	path, err := p.store.Locate(pkg.ID())
+	if err != nil {
+		return nil, err
+	}
+
+	path = filepath.Join(path, ".pkg-info.json")
 
 	f, err := os.Create(path)
 	if err != nil {
@@ -24,9 +30,10 @@ func (p *PackageWriteInfo) Write(pkg *ScriptPackage) (*data.PackageInfo, error) 
 	defer f.Close()
 
 	var sfd StoreFindDeps
-	sfd.storeDir = p.storeDir
+	sfd.store = p.store
 
 	var d ScriptCalcDeps
+	d.store = p.store
 
 	allDeps, err := d.BuildDeps(pkg)
 	if err != nil {

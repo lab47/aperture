@@ -3,9 +3,10 @@ package ops
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+	"sync"
 
 	"github.com/pkg/errors"
+	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
 )
 
@@ -14,7 +15,7 @@ var ErrCorruption = errors.New("corruption detected")
 type PackageCalcInstall struct {
 	common
 
-	StoreDir string
+	Store *config.Store
 
 	carLookup *CarLookup
 }
@@ -34,7 +35,12 @@ type InstallCar struct {
 
 func (i *InstallCar) Install(ctx context.Context, ienv *InstallEnv) error {
 	fmt.Printf("Installing car for %s...\n", i.data.info.ID)
-	return i.data.Unpack(ctx, filepath.Join(ienv.StoreDir, i.data.info.ID))
+	path, err := ienv.Store.Locate(i.data.info.ID)
+	if err != nil {
+		return err
+	}
+
+	return i.data.Unpack(ctx, path)
 }
 
 type PackagesToInstall struct {
@@ -49,8 +55,256 @@ type PackagesToInstall struct {
 }
 
 func (p *PackageCalcInstall) isInstalled(id string) (string, error) {
-	sf := StoreFind{StoreDir: p.StoreDir}
-	return sf.Find(id)
+	return p.Store.Locate(id)
+}
+
+// runtimeDeps returns the packages that the given package needs at runtime. If pkg
+// is not installed, then we return all dependencies.
+func (p *PackageCalcInstall) runtimeDeps(pkg *ScriptPackage) ([]*ScriptPackage, error) {
+	runtimeDeps := pkg.Dependencies()
+
+	installPath, err := p.isInstalled(pkg.ID())
+	if err != nil || installPath == "" {
+		for _, dep := range pkg.cs.Instances {
+			sp := &ScriptPackage{
+				id:       dep.ID(),
+				Instance: dep,
+			}
+
+			sp.cs.Dependencies = dep.Dependencies
+			sp.cs.Install = dep.Fn
+
+			runtimeDeps = append(runtimeDeps, sp)
+		}
+
+		return runtimeDeps, nil
+	}
+
+	var pri PackageReadInfo
+	pri.Store = p.Store
+
+	pi, err := pri.ReadPath(pkg, installPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var pruned []*ScriptPackage
+
+outer:
+	for _, sp := range runtimeDeps {
+		for _, id := range pi.RuntimeDeps {
+			if id == sp.ID() {
+				pruned = append(pruned, sp)
+				continue outer
+			}
+		}
+	}
+
+	runtimeDeps = pruned
+
+	return runtimeDeps, nil
+}
+
+func (p *PackageCalcInstall) calcSet(
+	pkgs []*ScriptPackage,
+	pti *PackagesToInstall,
+	seen map[string]int,
+) error {
+
+	// Step one, gather all possible dependencies needed by looking at
+	// ScriptPackage Dependencies and runtime deps of any installed packages.
+	set := make(map[string]struct{})
+	pkgDeps := make(map[string][]*ScriptPackage)
+
+	var (
+		toProcess []*ScriptPackage
+		full      []*ScriptPackage
+	)
+
+	for _, pkg := range pkgs {
+		set[pkg.ID()] = struct{}{}
+
+		deps, err := p.runtimeDeps(pkg)
+		if err != nil {
+			return err
+		}
+
+		pkgDeps[pkg.ID()] = deps
+
+		toProcess = append(toProcess, deps...)
+	}
+
+	for len(toProcess) > 0 {
+		pkg := toProcess[0]
+		toProcess = toProcess[1:]
+
+		if _, ok := set[pkg.ID()]; ok {
+			continue
+		}
+
+		full = append(full, pkg)
+
+		set[pkg.ID()] = struct{}{}
+
+		runtimeDeps, err := p.runtimeDeps(pkg)
+		if err != nil {
+			return err
+		}
+
+		pkgDeps[pkg.ID()] = runtimeDeps
+
+		for _, d := range runtimeDeps {
+			if _, ok := set[d.ID()]; ok {
+				fmt.Printf("%s: skip %s\n", pkg.ID(), d.ID())
+				continue
+			}
+
+			fmt.Printf("%s: add %s\n", pkg.ID(), d.ID())
+			toProcess = append(toProcess, d)
+		}
+	}
+
+	// Step 2, for the uninstalled packages, gather any car info about them.
+
+	type lookupData struct {
+		pkg  *ScriptPackage
+		car  *data.CarInfo
+		data *CarData
+		err  error
+	}
+
+	var mu sync.Mutex
+
+	carInfo := make(map[string]lookupData)
+
+	requests := make(chan *ScriptPackage, len(set))
+
+	var wg sync.WaitGroup
+
+	// Do a maximum of 20 car lookups at a time.
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for pkg := range requests {
+				carData, err := p.carLookup.Lookup(pkg)
+				if err != nil {
+					return
+				}
+
+				if carData == nil {
+					return
+				}
+
+				info, err := carData.Info()
+				if err != nil {
+					return
+				}
+
+				mu.Lock()
+				carInfo[pkg.ID()] = lookupData{
+					pkg:  pkg,
+					car:  info,
+					data: carData,
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+
+	for _, pkg := range full {
+		ip, err := p.isInstalled(pkg.ID())
+		if err != nil {
+			if errors.Is(err, config.ErrNoEntry) {
+				continue
+			}
+
+			return err
+		}
+
+		if ip != "" {
+			continue
+		}
+
+		requests <- pkg
+	}
+
+	close(requests)
+
+	wg.Wait()
+
+	// Step 3, go back through the toplevel requested packages and attempt to
+	// use any car dependencies
+
+	set = make(map[string]struct{})
+
+	full = nil
+	toProcess = nil
+
+	for _, pkg := range pkgs {
+		seen[pkg.ID()] = 0
+		toProcess = append(toProcess, pkg)
+	}
+
+	for len(toProcess) > 0 {
+		pkg := toProcess[0]
+		toProcess = toProcess[1:]
+
+		installPath, err := p.isInstalled(pkg.ID())
+		if err != nil {
+			if !errors.Is(err, config.ErrNoEntry) {
+				return err
+			}
+		}
+
+		pti.InstallDirs[pkg.ID()] = installPath
+		pti.Installed[pkg.ID()] = installPath != ""
+		pti.PackageIDs = append(pti.PackageIDs, pkg.ID())
+		pti.Scripts[pkg.ID()] = pkg
+
+		deps := pkgDeps[pkg.ID()]
+
+		car, ok := carInfo[pkg.ID()]
+		if ok {
+			pti.CarInfo[pkg.ID()] = car.car
+			pti.Installers[pkg.ID()] = &InstallCar{
+				common: p.common,
+				data:   car.data,
+			}
+
+			var pruned []*ScriptPackage
+
+		outer:
+			for _, sp := range deps {
+				for _, cd := range car.car.Dependencies {
+					if cd.ID == sp.ID() {
+						pruned = append(pruned, sp)
+						continue outer
+					}
+				}
+			}
+
+			deps = pruned
+		} else {
+			pti.Installers[pkg.ID()] = &ScriptInstall{common: p.common, pkg: pkg}
+		}
+
+		for _, d := range deps {
+			pti.Dependencies[pkg.ID()] = append(pti.Dependencies[pkg.ID()], d.ID())
+
+			if _, ok := seen[d.ID()]; ok {
+				seen[d.ID()]++
+				continue
+			}
+
+			seen[d.ID()] = 1
+
+			toProcess = append(toProcess, d)
+		}
+	}
+
+	return nil
 }
 
 func (p *PackageCalcInstall) consider(
@@ -70,7 +324,7 @@ func (p *PackageCalcInstall) consider(
 		pti.InstallDirs[pkg.ID()] = installPath
 
 		var pri PackageReadInfo
-		pri.StoreDir = p.StoreDir
+		pri.Store = p.Store
 
 		_, err := pri.ReadPath(pkg, installPath)
 		if err != nil {
@@ -180,14 +434,20 @@ func (p *PackageCalcInstall) CalculateSet(pkgs []*ScriptPackage) (*PackagesToIns
 	pti.CarInfo = make(map[string]*data.CarInfo)
 
 	seen := map[string]int{}
-	for _, pkg := range pkgs {
-		seen[pkg.ID()] = 0
 
-		err := p.consider(pkg, &pti, seen)
-		if err != nil {
-			return nil, err
-		}
+	err := p.calcSet(pkgs, &pti, seen)
+	if err != nil {
+		return nil, err
 	}
+
+	// for _, pkg := range pkgs {
+	// seen[pkg.ID()] = 0
+
+	// err := p.consider(pkg, &pti, seen)
+	// if err != nil {
+	// return nil, err
+	// }
+	// }
 
 	var toCheck []string
 

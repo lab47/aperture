@@ -32,6 +32,7 @@ type ScriptCalcSig struct {
 	Version      string
 	Install      *exprcore.Function
 	Hook         *exprcore.Function
+	PostInstall  *exprcore.Function
 	Inputs       []ScriptInput
 	Dependencies []*ScriptPackage
 	Instances    []*Instance
@@ -85,6 +86,13 @@ func (s *ScriptCalcSig) extract(proto *exprcore.Prototype) error {
 	}
 
 	s.Hook = hook
+
+	post, err := lang.FuncValue(proto.Attr("post_install"))
+	if err != nil {
+		return err
+	}
+
+	s.PostInstall = post
 
 	deps, err := lang.ListValue(proto.Attr("dependencies"))
 	if err != nil {
@@ -197,6 +205,7 @@ type sigData struct {
 	Constraints  map[string]string
 	Instances    map[string]struct{}
 	FuncSig      string
+	PostSig      string
 	Dependencies map[string]struct{}
 }
 
@@ -243,6 +252,15 @@ func (s *ScriptCalcSig) calcSig(
 		sd.FuncSig = funcSig
 	}
 
+	if s.PostInstall != nil {
+		funcSig, err := s.calcFuncSig(s.PostInstall)
+		if err != nil {
+			return "", err
+		}
+
+		sd.PostSig = funcSig
+	}
+
 	sd.Dependencies = make(map[string]struct{})
 
 	for _, scr := range s.Dependencies {
@@ -267,6 +285,7 @@ func (s *ScriptCalcSig) calcFuncSig(fn exprcore.Value) (string, error) {
 	rc.topDir = "$top"
 	rc.buildDir = "$build"
 	rc.installDir = "$prefix"
+	rc.stateDir = "$state"
 
 	h, _ := blake2b.New256(nil)
 

@@ -115,17 +115,24 @@ func installF(ctx context.Context, opts struct {
 		return err
 	}
 
-	storeDir := cfg.StorePath()
-	buildRoot := filepath.Join(storeDir, "_build")
+	buildRoot := cfg.BuildPath()
 
 	err = os.MkdirAll(buildRoot, 0755)
 	if err != nil {
 		return err
 	}
 
+	stateDir := cfg.StatePath()
+
+	err = os.MkdirAll(stateDir, 0755)
+	if err != nil {
+		return err
+	}
+
 	ienv := &ops.InstallEnv{
-		StoreDir: storeDir,
+		Store:    cfg.Store(),
 		BuildDir: buildRoot,
+		StateDir: stateDir,
 	}
 
 	var (
@@ -286,17 +293,24 @@ func shellF(ctx context.Context, opts struct {
 		return nil
 	}
 
-	storeDir := cfg.StorePath()
-	buildRoot := filepath.Join(storeDir, "_build")
+	buildRoot := cfg.BuildPath()
 
 	err = os.MkdirAll(buildRoot, 0755)
 	if err != nil {
 		return err
 	}
 
+	stateDir := cfg.StatePath()
+
+	err = os.MkdirAll(stateDir, 0755)
+	if err != nil {
+		return err
+	}
+
 	ienv := &ops.InstallEnv{
-		StoreDir: storeDir,
+		Store:    cfg.Store(),
 		BuildDir: buildRoot,
+		StateDir: stateDir,
 	}
 
 	var cl ops.ProjectLoad
@@ -622,14 +636,6 @@ func debugF(ctx context.Context, opts struct {
 			name = path
 		}
 
-		fmt.Printf("Loading for test install: %s\n", name)
-		fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
-
-		proj, err := cl.Single(cfg, name)
-		if err != nil {
-			return err
-		}
-
 		root := opts.TestDir
 
 		fmt.Printf("Installing packages into: %s\n", root)
@@ -639,9 +645,24 @@ func debugF(ctx context.Context, opts struct {
 			return err
 		}
 
+		store := cfg.Store()
+
+		store.Pivot(filepath.Join(root, "install"))
+
+		spew.Dump(store)
+
+		fmt.Printf("Loading for test install: %s\n", name)
+		fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
+
+		proj, err := cl.Single(cfg, name)
+		if err != nil {
+			return err
+		}
+
 		ienv := &ops.InstallEnv{
+			Store:       store,
 			BuildDir:    filepath.Join(root, "build"),
-			StoreDir:    filepath.Join(root, "install"),
+			StateDir:    filepath.Join(root, "state"),
 			RetainBuild: true,
 			StartShell:  opts.Shell,
 		}
@@ -660,7 +681,12 @@ func debugF(ctx context.Context, opts struct {
 			return err
 		}
 
-		err = os.MkdirAll(ienv.StoreDir, 0755)
+		err = os.MkdirAll(ienv.Store.Default, 0755)
+		if err != nil {
+			return err
+		}
+
+		err = os.MkdirAll(ienv.StateDir, 0755)
 		if err != nil {
 			return err
 		}

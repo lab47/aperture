@@ -3,15 +3,22 @@ package ops
 import (
 	"os"
 	"path/filepath"
+
+	"lab47.dev/aperture/pkg/config"
 )
 
 type StoreFreeze struct {
-	storeDir string
+	store *config.Store
 }
 
 func (s *StoreFreeze) Freeze(id string) error {
+	path, err := s.store.Locate(id)
+	if err != nil {
+		return err
+	}
+
 	var dirs []string
-	err := filepath.Walk(filepath.Join(s.storeDir, id), func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if info.IsDir() {
 			dirs = append(dirs, path)
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
+	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/repo"
 )
@@ -23,7 +24,7 @@ import (
 type ScriptLoad struct {
 	common
 
-	StoreDir string
+	Store *config.Store
 
 	lookup *ScriptLookup
 	cfg    *Config
@@ -889,7 +890,16 @@ func (l *ScriptLoad) loadHelpers(s *ScriptPackage, lctx *loadContext, name strin
 func (s *ScriptPackage) Attr(name string) (exprcore.Value, error) {
 	switch name {
 	case "prefix":
-		return exprcore.String(filepath.Join(s.loader.StoreDir, s.ID())), nil
+		path, err := s.loader.Store.Locate(s.ID())
+		if err != nil {
+			if err == config.ErrNoEntry {
+				path = s.loader.Store.ExpectedPath(s.ID())
+			} else {
+				return nil, err
+			}
+		}
+
+		return exprcore.String(path), nil
 	}
 
 	if s.helpers == nil {
