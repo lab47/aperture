@@ -525,8 +525,6 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 	var scd ScriptCalcDeps
 	scd.store = cfg.Store()
 
-	infos := map[string]*data.CarDependency{}
-
 	pkgs, err := scd.EvalDeps(p.Install)
 	if err != nil {
 		return nil, err
@@ -540,6 +538,16 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 	for _, pkg := range pkgs {
 		pb.On(pkg.requestName)
 
+		carPath := filepath.Join(dest, pkg.ID()+".car")
+		if _, err := os.Stat(carPath); err == nil {
+			export = append(export, &ExportedCar{
+				Package: pkg,
+				Path:    carPath,
+			})
+
+			continue
+		}
+
 		pi, err := pri.Read(pkg)
 		if err != nil {
 			return nil, err
@@ -548,19 +556,12 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 		var deps []*data.CarDependency
 
 		for _, d := range pi.RuntimeDeps {
-			cd, ok := infos[d]
-			if !ok {
-				return nil, fmt.Errorf("missing dependency: %s", d)
-			}
-
-			deps = append(deps, cd)
+			deps = append(deps, &data.CarDependency{
+				ID: d,
+			})
 		}
 
 		osName, osVer, arch := config.Platform()
-
-		infos[pkg.ID()] = &data.CarDependency{
-			ID: pkg.ID(),
-		}
 
 		ci := &data.CarInfo{
 			ID:           pkg.ID(),
@@ -575,8 +576,6 @@ func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) (
 				Arch:      arch,
 			},
 		}
-
-		carPath := filepath.Join(dest, pkg.ID()+".car")
 
 		f, err := os.Create(carPath)
 		if err != nil {
