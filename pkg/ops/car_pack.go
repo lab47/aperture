@@ -91,9 +91,9 @@ func (c *CarPack) Pack(cinfo *data.CarInfo, dir string, w io.Writer) error {
 					link = link[len(dir)+1:]
 				}
 
-				if !strings.HasPrefix(abs, dir) {
-					return fmt.Errorf("link points outside of root dir: %s", link)
-				}
+				// if !strings.HasPrefix(abs, dir) {
+				// return fmt.Errorf("link points outside of root dir: %s", abs)
+				// }
 			}
 
 			hdr, err := tar.FileInfoHeader(fi, link)

@@ -76,13 +76,17 @@ func (c *CarPublish) getInfo(path string) (*data.CarInfo, []byte, error) {
 	return &info, sig, nil
 }
 
+func OCICarTag(id string) string {
+	return strings.ReplaceAll(id, "@", "-")
+}
+
 func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {
 	info, sig, err := c.getInfo(path)
 	if err != nil {
 		return err
 	}
 
-	target := fmt.Sprintf("%s:%s", repo, info.ID)
+	target := fmt.Sprintf("%s:%s", repo, OCICarTag(info.ID))
 
 	ref, err := name.ParseReference(target)
 	if err != nil {
@@ -137,6 +141,9 @@ func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {
 	}
 
 	idx := strings.IndexByte(info.ID, '-')
+	if idx == -1 {
+		return fmt.Errorf("strange id: %s", info.ID)
+	}
 
 	hashRef := info.ID[:idx]
 

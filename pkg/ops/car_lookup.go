@@ -75,7 +75,7 @@ func (c *CarLookup) Lookup(pkg *ScriptPackage) (*CarData, error) {
 
 	id := pkg.ID()
 
-	target := fmt.Sprintf("%s:%s", cfg.OCIRoot, id)
+	target := fmt.Sprintf("%s:%s", cfg.OCIRoot, OCICarTag(id))
 
 	ref, err := name.ParseReference(target)
 	if err != nil {
