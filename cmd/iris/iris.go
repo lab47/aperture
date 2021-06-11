@@ -446,7 +446,10 @@ func inspectCarF(ctx context.Context, opts struct {
 }
 
 func publishCarF(ctx context.Context, opts struct {
-	Built bool `short:"B" long:"built" description:"publish all built packages"`
+	Built   bool   `short:"B" long:"built" description:"publish all built packages"`
+	Loaded  string `short:"L" long:"loaded" description:"publish previous exported cars by a project"`
+	Package string `short:"p" description:"export and publish a car for a package"`
+	Dir     string `long:"dir" description:"Use this package to store car files"`
 }) error {
 	fs := pflag.NewFlagSet("inspect-car", pflag.ExitOnError)
 
@@ -454,11 +457,137 @@ func publishCarF(ctx context.Context, opts struct {
 	cp.Username = os.Getenv("GITHUB_USER")
 	cp.Password = os.Getenv("GITHUB_TOKEN")
 
-	if !opts.Built {
+	if !opts.Built && fs.NArg() > 0 {
 		err := cp.PublishCar(context.Background(), fs.Arg(0), "ghcr.io/lab47/aperture-packages")
 		if err != nil {
 			return err
 		}
+	}
+
+	if opts.Loaded != "" {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			return err
+		}
+
+		buildRoot := cfg.BuildPath()
+
+		err = os.MkdirAll(buildRoot, 0755)
+		if err != nil {
+			return err
+		}
+
+		stateDir := cfg.StatePath()
+
+		err = os.MkdirAll(stateDir, 0755)
+		if err != nil {
+			return err
+		}
+
+		var (
+			proj *ops.Project
+			cl   ops.ProjectLoad
+		)
+
+		proj, err = cl.Load(cfg)
+		if err != nil {
+			return err
+		}
+
+		exportDir := opts.Loaded
+
+		ienv := &ops.InstallEnv{
+			Store: &config.Store{
+				Paths:   []string{"/nonexistant"},
+				Default: "/nonexistant",
+			},
+		}
+
+		toInstall, err := proj.CalculateSet(ctx, ienv)
+		if err != nil {
+			return err
+		}
+
+		var cp ops.CarPublish
+		cp.Username = os.Getenv("GITHUB_USER")
+		cp.Password = os.Getenv("GITHUB_TOKEN")
+
+		for _, pkg := range toInstall.Scripts {
+			rc := pkg.RepoConfig()
+			if rc == nil {
+				continue
+			}
+
+			cfg, err := rc.Config()
+			if err != nil {
+				return err
+			}
+
+			path := filepath.Join(exportDir, pkg.ID()+".car")
+
+			if _, err := os.Stat(path); err != nil {
+				fmt.Printf("Missing car: %s\n", path)
+				continue
+			}
+
+			fmt.Printf("Publishing %s (%s) to %s\n", pkg.ID(), path, cfg.OCIRoot)
+			err = cp.PublishCar(ctx, path, cfg.OCIRoot)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	if opts.Package != "" {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			return err
+		}
+
+		buildRoot := cfg.BuildPath()
+
+		err = os.MkdirAll(buildRoot, 0755)
+		if err != nil {
+			return err
+		}
+
+		stateDir := cfg.StatePath()
+
+		err = os.MkdirAll(stateDir, 0755)
+		if err != nil {
+			return err
+		}
+
+		var (
+			proj *ops.Project
+			cl   ops.ProjectLoad
+		)
+
+		proj, err = cl.Single(cfg, opts.Package)
+		if err != nil {
+			return err
+		}
+
+		dir := opts.Dir
+
+		if dir == "" {
+			dir, err = ioutil.TempDir("", "iris")
+			if err != nil {
+				return err
+			}
+
+			defer os.RemoveAll(dir)
+		}
+
+		cars, err := proj.Export(ctx, cfg, dir)
+		if err != nil {
+			return err
+		}
+
+		return publishCars(ctx, cfg, cars)
+
 	}
 
 	var ss ops.StoreScan
