@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/go-getter"
 	"github.com/hashicorp/go-hclog"
 	"github.com/lab47/exprcore/exprcore"
+	"github.com/morikuni/aec"
 	"github.com/mr-tron/base58"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/blake2b"
@@ -233,11 +234,6 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 
 	err := os.Mkdir(buildDir, 0755)
 	if err != nil {
-		// Possible crash? Nuke the build dir.
-		if !os.IsExist(err) {
-			return err
-		}
-
 		os.RemoveAll(buildDir)
 		err := os.Mkdir(buildDir, 0755)
 		if err != nil {
@@ -311,8 +307,6 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 	}
 
-	log.SetLevel(hclog.Debug)
-
 	var rc RunCtx
 	rc.ctx = ctx
 	rc.L = log
@@ -378,22 +372,32 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 
 		bi.Dependencies[dep.Name()] = dr
 
-		path = append(path, filepath.Join(depDir, "bin"))
-		cmakePrefix = append(cmakePrefix, depDir)
+		binpath := filepath.Join(depDir, "bin")
+
+		if _, err := os.Stat(binpath); err == nil {
+			path = append(path, binpath)
+		}
+
+		var includeCmake bool
 
 		incpath := filepath.Join(depDir, "include")
 		if _, err := os.Stat(incpath); err == nil {
 			cflags = append(cflags, "-I"+incpath)
+			includeCmake = true
 		}
 
 		libpath := filepath.Join(depDir, "lib")
 		if _, err := os.Stat(libpath); err == nil {
 			ldflags = append(ldflags, "-L"+libpath)
+			includeCmake = true
 
 			pcpath := filepath.Join(depDir, "lib", "pkgconfig")
 			if _, err := os.Stat(pcpath); err == nil {
 				pkgconfig = append(pkgconfig, pcpath)
 			}
+		}
+		if includeCmake {
+			cmakePrefix = append(cmakePrefix, depDir)
 		}
 	}
 
@@ -468,34 +472,55 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 	}
 
-	if i.pkg.Instance != nil && i.pkg.Instance.Path != "" {
-		path := rc.outPath(i.pkg.Instance.Path)
-		log.Info("writing data", "size", len(i.pkg.Instance.Data), "path", i.pkg.Instance.Path)
-		err = ioutil.WriteFile(path, i.pkg.Instance.Data, 0644)
+	var runInstall, runPost, export bool
+
+	if ienv.ExportPath != "" {
+		if i.pkg.Repo() != "" {
+			export = true
+		}
+
+		runInstall = true
+		runPost = i.pkg.cs.PostInstall != nil
+	} else if ienv.SkipPostInstall {
+		runInstall = true
+		runPost = false
+	} else if ienv.OnlyPostInstall {
+		runInstall = false
+		runPost = i.pkg.cs.PostInstall != nil
 	} else {
-		rc.installDir = targetDir
-		_, err = exprcore.Call(&thread, i.pkg.cs.Install, args, nil)
+		runInstall = true
+		runPost = i.pkg.cs.PostInstall != nil
+	}
+
+	if runInstall {
+		if i.pkg.Instance != nil && i.pkg.Instance.Path != "" {
+			path := rc.outPath(i.pkg.Instance.Path)
+			log.Info("writing data", "size", len(i.pkg.Instance.Data), "path", i.pkg.Instance.Path)
+			err = ioutil.WriteFile(path, i.pkg.Instance.Data, 0644)
+		} else {
+			rc.installDir = targetDir
+			_, err = exprcore.Call(&thread, i.pkg.cs.Install, args, nil)
+		}
 	}
 
 	if err != nil {
 		log.Error("error running script install", "error", err)
 	} else {
-		if !ienv.SkipPostInstall {
-			log.Debug("executing post install")
 
-			if i.pkg.cs.PostInstall != nil {
-				rc.installDir = targetDir
-				_, err = exprcore.Call(&thread, i.pkg.cs.PostInstall, args, nil)
+		prep := func() {
+			// We still need to do this before making the .car file
+			var prc PackageRemoveCruft
+			prc.common = i.common
+
+			perr := prc.RemoveCruft(targetDir)
+			if perr != nil {
+				log.Error("Error adjusting library names", "error", perr)
 			}
-		}
 
-		if err != nil {
-			log.Error("error running script post_install", "error", err)
-		} else {
 			var pan PackageAdjustNames
 			pan.common = i.common
 
-			perr := pan.Adjust(targetDir)
+			perr = pan.Adjust(targetDir)
 			if perr != nil {
 				log.Error("Error adjusting library names", "error", perr)
 			}
@@ -507,13 +532,60 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 			if perr != nil {
 				log.Error("error writing package info", "error", perr)
 			}
+		}
+
+		var didExport bool
+
+		// If we're doing an export and the script has a post_install, then
+		// we do the prep and export before running post_install, then do the package
+		// prep again.
+		if export || runPost {
+			// We still need to do this before making the .car file
+			prep()
+
+			var ce CarExport
+			ce.cfg = ienv.Config
+
+			exported, perr := ce.Export(i.pkg, targetDir, ienv.ExportPath)
+			if perr != nil {
+				log.Error("error writing car file", "error", perr)
+			}
+
+			ienv.ExportedCars = append(ienv.ExportedCars, exported)
+
+			didExport = true
+		}
+
+		if runPost {
+			log.Debug("executing post install")
+
+			rc.installDir = targetDir
+			_, err = exprcore.Call(&thread, i.pkg.cs.PostInstall, args, nil)
+		}
+
+		if err != nil {
+			log.Error("error running script post_install", "error", err)
+		} else {
+			prep()
 
 			var sf StoreFreeze
 			sf.store = ienv.Store
 
-			perr = sf.Freeze(i.pkg.ID())
+			perr := sf.Freeze(i.pkg.ID())
 			if perr != nil {
 				log.Error("error freezing store dir", "error", perr)
+			}
+
+			if export && !didExport {
+				var ce CarExport
+				ce.cfg = ienv.Config
+
+				exported, perr := ce.Export(i.pkg, targetDir, ienv.ExportPath)
+				if perr != nil {
+					log.Error("error writing car file", "error", perr)
+				}
+
+				ienv.ExportedCars = append(ienv.ExportedCars, exported)
 			}
 		}
 	}
@@ -833,6 +905,8 @@ func runCmd(env *RunCtx, cmd *exec.Cmd) error {
 
 	var wg sync.WaitGroup
 
+	header := env.outputPrefix + aec.Bold.Apply(" |")
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -841,7 +915,7 @@ func runCmd(env *RunCtx, cmd *exec.Cmd) error {
 		for {
 			line, err := br.ReadString('\n')
 			if len(line) > 0 {
-				fmt.Printf("%s │ %s\n", env.outputPrefix, strings.TrimRight(line, " \n\t"))
+				fmt.Printf("%s %s\n", header, strings.TrimRight(line, " \n\t"))
 			}
 
 			if err != nil {
@@ -857,7 +931,7 @@ func runCmd(env *RunCtx, cmd *exec.Cmd) error {
 		for {
 			line, err := br.ReadString('\n')
 			if len(line) > 0 {
-				fmt.Printf("%s │ %s\n", env.outputPrefix, strings.TrimRight(line, " \n\t"))
+				fmt.Printf("%s %s\n", header, strings.TrimRight(line, " \n\t"))
 			}
 
 			if err != nil {
@@ -1567,6 +1641,7 @@ func downloadFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tupl
 
 	path = env.workPath(path)
 
+	fmt.Printf("Downloading %s...\n", url)
 	env.L.Debug("downloading url", "url", url, "into", path)
 
 	f, err := os.Create(path)

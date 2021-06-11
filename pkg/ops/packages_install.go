@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/morikuni/aec"
 	"github.com/pkg/errors"
 )
 
@@ -54,8 +55,12 @@ func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInsta
 			continue
 		}
 
-		fmt.Printf("Installing package %s (%d/%d) (elapse: %s)\n",
-			id, i+1, total, time.Since(start))
+		fmt.Println(
+			aec.Bold.Apply(
+				fmt.Sprintf("🔥 Installing package %s (%d/%d) (elapse: %s)",
+					id, i+1, total, time.Since(start)),
+			),
+		)
 
 		p.L().Debug("running installer", "id", id)
 

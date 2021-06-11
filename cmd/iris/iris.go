@@ -161,6 +161,7 @@ func installF(ctx context.Context, opts struct {
 		Store:    cfg.Store(),
 		BuildDir: buildRoot,
 		StateDir: stateDir,
+		Config:   cfg,
 	}
 
 	var (
@@ -206,11 +207,6 @@ func installF(ctx context.Context, opts struct {
 
 	defer cleanup()
 
-	requested, toInstall, err := proj.InstallPackages(ctx, ienv)
-	if err != nil {
-		return err
-	}
-
 	exportDir := opts.Export
 
 	if opts.Publish && exportDir == "" {
@@ -230,16 +226,16 @@ func installF(ctx context.Context, opts struct {
 			return err
 		}
 
-		cars, err := proj.Export(ctx, cfg, exportDir)
-		if err != nil {
-			return err
-		}
+		ienv.ExportPath = exportDir
+	}
 
-		if opts.Publish {
-			return publishCars(ctx, cfg, cars)
-		}
+	requested, toInstall, err := proj.InstallPackages(ctx, ienv)
+	if err != nil {
+		return err
+	}
 
-		return nil
+	if exportDir != "" && opts.Publish {
+		return publishCars(ctx, cfg, ienv.ExportedCars)
 	}
 
 	prof, err := profile.OpenProfile(cfg, profilePath)

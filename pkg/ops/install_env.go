@@ -26,4 +26,20 @@ type InstallEnv struct {
 	// functions. This is typically used when we're building a package
 	// only to package it as a .car file.
 	SkipPostInstall bool
+
+	// PostInstallOnly indicates that we should not run any install
+	// functions, only run post_install. This is typically used when we're
+	// installing a .car and allow the package to adjust it into place.
+	OnlyPostInstall bool
+
+	// If set, install will generate a .car file for the packages install into
+	// ExportPath. It performs the export before running post_install so the packages
+	// are sealed properly.
+	ExportPath string
+
+	// When using ExportPath, this will be populated with the information about the car
+	// files written.
+	ExportedCars []*ExportedCar
+
+	Config *config.Config
 }

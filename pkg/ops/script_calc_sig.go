@@ -108,6 +108,8 @@ func (s *ScriptCalcSig) extract(proto *exprcore.Prototype) error {
 		for iter.Next(&x) {
 			if script, ok := x.(*ScriptPackage); ok {
 				scripts = append(scripts, script)
+			} else {
+				fmt.Printf("unknown return type: %T", x)
 			}
 		}
 

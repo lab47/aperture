@@ -148,7 +148,11 @@ func (s *ScriptPackage) Constraints() map[string]string {
 // Dependencies returns any ScriptPackages that this one depends on, as
 // declared via the dependencies keyword.
 func (s *ScriptPackage) Dependencies() []*ScriptPackage {
-	return s.cs.Dependencies
+	// Make a copy so that the caller can't accidentally manipulate our canonical list of
+	// dependencies.
+	slice := make([]*ScriptPackage, len(s.cs.Dependencies))
+	copy(slice, s.cs.Dependencies)
+	return slice
 }
 
 func (s *ScriptPackage) DependencyNames() []string {
@@ -892,7 +896,7 @@ func (s *ScriptPackage) Attr(name string) (exprcore.Value, error) {
 	case "prefix":
 		path, err := s.loader.Store.Locate(s.ID())
 		if err != nil {
-			if err == config.ErrNoEntry {
+			if errors.Is(err, config.ErrNoEntry) {
 				path = s.loader.Store.ExpectedPath(s.ID())
 			} else {
 				return nil, err

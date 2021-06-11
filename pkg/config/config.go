@@ -282,6 +282,10 @@ func (c *Config) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (si
 	return c.signer.Sign(rand, digest, opts)
 }
 
+func (c *Config) ConfigDir() string {
+	return c.configDir
+}
+
 func (c *Config) StorePath() string {
 	return filepath.Join(c.DataDir, "store")
 }

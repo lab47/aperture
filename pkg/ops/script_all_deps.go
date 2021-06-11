@@ -1,6 +1,8 @@
 package ops
 
-import "lab47.dev/aperture/pkg/config"
+import (
+	"lab47.dev/aperture/pkg/config"
+)
 
 type ScriptCalcDeps struct {
 	store *config.Store

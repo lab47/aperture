@@ -32,6 +32,11 @@ func (s *StoreFindDeps) PruneDeps(id string, deps []*ScriptPackage) ([]*ScriptPa
 			return nil
 		}
 
+		// Don't scan any pkg-info files we might find.
+		if filepath.Base(path) == ".pkg-info.json" {
+			return nil
+		}
+
 		f, err := os.Open(path)
 		if err != nil {
 			return err

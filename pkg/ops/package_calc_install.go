@@ -3,6 +3,7 @@ package ops
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -30,6 +31,8 @@ type PackageInfo interface {
 
 type InstallCar struct {
 	common
+
+	pkg  *ScriptPackage
 	data *CarData
 }
 
@@ -40,7 +43,24 @@ func (i *InstallCar) Install(ctx context.Context, ienv *InstallEnv) error {
 		return err
 	}
 
-	return i.data.Unpack(ctx, path)
+	err = i.data.Unpack(ctx, path)
+	if err != nil {
+		return err
+	}
+
+	if i.pkg.cs.PostInstall != nil {
+		var mod InstallEnv = *ienv
+
+		mod.OnlyPostInstall = true
+
+		var si ScriptInstall
+		si.common = i.common
+
+		si.pkg = i.pkg
+		return si.Install(ctx, &mod)
+	}
+
+	return nil
 }
 
 type PackagesToInstall struct {
@@ -77,30 +97,42 @@ func (p *PackageCalcInstall) runtimeDeps(pkg *ScriptPackage) ([]*ScriptPackage, 
 			runtimeDeps = append(runtimeDeps, sp)
 		}
 
-		return runtimeDeps, nil
-	}
+	} else {
+		var pri PackageReadInfo
+		pri.Store = p.Store
 
-	var pri PackageReadInfo
-	pri.Store = p.Store
+		pi, err := pri.ReadPath(pkg, installPath)
+		if err != nil {
+			return nil, err
+		}
 
-	pi, err := pri.ReadPath(pkg, installPath)
-	if err != nil {
-		return nil, err
-	}
+		var pruned []*ScriptPackage
 
-	var pruned []*ScriptPackage
-
-outer:
-	for _, sp := range runtimeDeps {
-		for _, id := range pi.RuntimeDeps {
-			if id == sp.ID() {
-				pruned = append(pruned, sp)
-				continue outer
+	outer:
+		for _, sp := range runtimeDeps {
+			for _, id := range pi.RuntimeDeps {
+				if id == sp.ID() {
+					pruned = append(pruned, sp)
+					continue outer
+				}
 			}
 		}
+
+		runtimeDeps = pruned
 	}
 
-	runtimeDeps = pruned
+	sort.Slice(runtimeDeps, func(i, j int) bool {
+		var (
+			in = runtimeDeps[i].Name()
+			jn = runtimeDeps[j].Name()
+		)
+
+		if in == jn {
+			return runtimeDeps[i].Version() < runtimeDeps[j].Version()
+		}
+
+		return in < jn
+	})
 
 	return runtimeDeps, nil
 }
@@ -155,11 +187,9 @@ func (p *PackageCalcInstall) calcSet(
 
 		for _, d := range runtimeDeps {
 			if _, ok := set[d.ID()]; ok {
-				fmt.Printf("%s: skip %s\n", pkg.ID(), d.ID())
 				continue
 			}
 
-			fmt.Printf("%s: add %s\n", pkg.ID(), d.ID())
 			toProcess = append(toProcess, d)
 		}
 	}
@@ -270,6 +300,7 @@ func (p *PackageCalcInstall) calcSet(
 			pti.CarInfo[pkg.ID()] = car.car
 			pti.Installers[pkg.ID()] = &InstallCar{
 				common: p.common,
+				pkg:    pkg,
 				data:   car.data,
 			}
 
@@ -451,7 +482,17 @@ func (p *PackageCalcInstall) CalculateSet(pkgs []*ScriptPackage) (*PackagesToIns
 
 	var toCheck []string
 
-	for id, deg := range seen {
+	var sorted []string
+
+	for id := range seen {
+		sorted = append(sorted, id)
+	}
+
+	sort.Strings(sorted)
+
+	for _, id := range sorted {
+		deg := seen[id]
+
 		if deg == 0 {
 			toCheck = append(toCheck, id)
 		}
