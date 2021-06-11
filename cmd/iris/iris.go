@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/hashicorp/go-hclog"
 	"github.com/mitchellh/cli"
+	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 	"lab47.dev/aperture/pkg/cmd"
@@ -40,6 +41,13 @@ func main() {
 	c := cli.NewCLI("iris", "0.1.0")
 	c.Args = os.Args[1:]
 	c.Commands = map[string]cli.CommandFactory{
+		"setup": func() (cli.Command, error) {
+			return cmd.New(
+				"setup",
+				"perform any system or user setup",
+				setupF,
+			), nil
+		},
 		"install": func() (cli.Command, error) {
 			return cmd.New(
 				"install",
@@ -98,6 +106,26 @@ func main() {
 	}
 
 	os.Exit(exitStatus)
+}
+
+func setupF(ctx context.Context, opts struct{}) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return errors.Wrapf(err, "Unable to create or load configuration directory")
+	}
+
+	fmt.Printf("Config Dir: %s\n", cfg.ConfigDir())
+	fmt.Printf("Aperture Data Dir: %s\n", cfg.DataDir)
+	fmt.Printf("User Profiles Path: %s\n", cfg.ProfilesPath)
+
+	id, err := cfg.SignerId()
+	if err != nil {
+		return errors.Wrapf(err, "Unable to calculate user keys")
+	}
+
+	fmt.Printf("User Signer Id: %s\n", id)
+
+	return nil
 }
 
 func installF(ctx context.Context, opts struct {
