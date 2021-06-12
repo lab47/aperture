@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/lab47/exprcore/exprcore"
 	"github.com/mitchellh/go-homedir"
@@ -35,8 +36,15 @@ type Installable interface {
 	Install(tmpdir string) error
 }
 
+type ProjectSource struct {
+	Name string
+	Ref  string
+}
+
 type ProjectLoad struct {
 	common
+
+	sources []*ProjectSource
 
 	lockFile *data.LockFile
 	path     []string
@@ -91,42 +99,94 @@ func (p *platform) AttrNames() []string {
 	return []string{"os", "arch"}
 }
 
-func (c *ProjectLoad) Load(cfg *config.Config) (*Project, error) {
-	c.store = cfg.Store()
+func (c *ProjectLoad) setupPath(ctx context.Context, cfg *config.Config) error {
+	var pp []*config.PackagePath
+
+	for _, src := range c.sources {
+		path, err := config.CalcPath(src.Name, src.Ref)
+		if err != nil {
+			return err
+		}
+
+		pp = append(pp, path)
+	}
+
+	if len(pp) == 0 {
+		paths, err := cfg.PackagePath()
+		if err != nil {
+			return err
+		}
+
+		pp = paths
+	}
+
+	saveLock := false
 
 	var lf data.LockFile
 	f, err := os.Open("aperture-lock.json")
 	if err == nil {
+		defer f.Close()
 		err = json.NewDecoder(f).Decode(&lf)
 		if err != nil {
-			return nil, err
+			return err
 		}
-	} else {
-		lf = data.LockFile{
-			&data.LockFileEntry{
-				Name: "aperture",
-				Path: "github.com/lab47/aperture-packages",
-			},
-		}
-	}
 
-	for _, ent := range lf {
-		if len(ent.Path) >= 2 && ent.Path[0] == '~' {
-			dir, err := homedir.Expand(ent.Path)
-			if err != nil {
-				return nil, err
+	outer:
+		for _, ent := range lf.Sources {
+			for _, path := range pp {
+				if path.Location == ent.Ref && path.Version == ent.RequestedVersion {
+					path.ResolvedVersion = ent.ResolvedVersion
+					continue outer
+				}
 			}
 
-			ent.Path = dir
+			// An entry in sources didn't have a lock entry
+			saveLock = true
 		}
-
-		c.path = append(c.path, ent.Path)
+	} else {
+		saveLock = true
 	}
+
+	c.path, err = cfg.MapPaths(ctx, pp)
+	if err != nil {
+		return err
+	}
+
+	if !saveLock {
+		return nil
+	}
+
+	var nlf data.LockFile
+	nlf.CreatedAt = time.Now()
+
+	for _, path := range pp {
+		nlf.Sources = append(nlf.Sources, &data.LockFileEntry{
+			Name:             path.Name,
+			Ref:              path.Location,
+			RequestedVersion: path.Version,
+			ResolvedVersion:  path.ResolvedVersion,
+		})
+	}
+
+	of, err := os.Create("aperture-lock.json")
+	if err != nil {
+		return err
+	}
+
+	defer of.Close()
+
+	return json.NewEncoder(of).Encode(&nlf)
+}
+
+func (c *ProjectLoad) Load(ctx context.Context, cfg *config.Config) (*Project, error) {
+	c.cfg = cfg
+	c.store = cfg.Store()
 
 	c.constraints = config.SystemConstraints()
 
 	vars := exprcore.StringDict{
 		"install":  exprcore.NewBuiltin("install", c.installFn),
+		"source":   exprcore.NewBuiltin("source", c.sourceFn),
 		"homebrew": exprcore.NewBuiltin("homebrew", c.homebrewFn),
 		"platform": &platform{},
 	}
@@ -154,36 +214,13 @@ func (c *ProjectLoad) Load(cfg *config.Config) (*Project, error) {
 	return &proj, nil
 }
 
-func (c *ProjectLoad) Single(cfg *config.Config, name string) (*Project, error) {
+func (c *ProjectLoad) Single(ctx context.Context, cfg *config.Config, name string) (*Project, error) {
+	c.cfg = cfg
 	c.store = cfg.Store()
-
-	var lf data.LockFile
-	f, err := os.Open("aperture-lock.json")
-	if err == nil {
-		err = json.NewDecoder(f).Decode(&lf)
-		if err != nil {
-			return nil, errors.Wrapf(err, "decoding aperture-lock.json")
-		}
-
-		for _, ent := range lf {
-			if len(ent.Path) >= 2 && ent.Path[0] == '~' {
-				dir, err := homedir.Expand(ent.Path)
-				if err != nil {
-					return nil, errors.Wrapf(err, "expanding with homedir")
-				}
-
-				ent.Path = dir
-			}
-
-			c.path = append(c.path, ent.Path)
-		}
-	} else {
-		c.path = cfg.LoadPath()
-	}
 
 	c.constraints = config.SystemConstraints()
 
-	pkg, err := c.loadScript(name)
+	pkg, err := c.loadScript(ctx, "", name)
 	if err != nil {
 		return nil, errors.Wrapf(err, "attempting to load '%s'", name)
 	}
@@ -196,15 +233,43 @@ func (c *ProjectLoad) Single(cfg *config.Config, name string) (*Project, error) 
 	return &proj, nil
 }
 
+func (l *ProjectLoad) sourceFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple, kwargs []exprcore.Tuple) (exprcore.Value, error) {
+	// Clearly any previously used path
+	l.path = nil
+
+	for _, arg := range args {
+		switch i := arg.(type) {
+		case exprcore.String:
+			l.sources = append(l.sources, &ProjectSource{
+				Ref: string(i),
+			})
+		}
+	}
+
+	for _, tup := range kwargs {
+		key := tup[0].(exprcore.String)
+
+		switch i := tup[1].(type) {
+		case exprcore.String:
+			l.sources = append(l.sources, &ProjectSource{
+				Name: string(key),
+				Ref:  string(i),
+			})
+		}
+	}
+
+	return exprcore.None, nil
+}
+
 func (l *ProjectLoad) installFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple, kwargs []exprcore.Tuple) (exprcore.Value, error) {
 	for _, arg := range args {
 		switch i := arg.(type) {
-		case *LoadedPackage:
-			l.homebrewPackages = append(l.homebrewPackages, i.name)
+		case *PackageSelector:
+			l.homebrewPackages = append(l.homebrewPackages, i.Name)
 		case *ScriptPackage:
 			l.toInstall = append(l.toInstall, i)
 		case exprcore.String:
-			sp, err := l.loadScript(string(i))
+			sp, err := l.loadScript(context.Background(), "", string(i))
 			if err != nil {
 				return nil, err
 			}
@@ -223,30 +288,37 @@ func (l *ProjectLoad) installFn(thread *exprcore.Thread, b *exprcore.Builtin, ar
 	return exprcore.None, nil
 }
 
-type LoadedPackage struct {
-	name string
-	// installables []Installable
+type PackageSelector struct {
+	Namespace string
+	Name      string
 }
 
-func (l *LoadedPackage) String() string {
-	return fmt.Sprintf("<loaded package: %s>", l.name)
+func (l *PackageSelector) String() string {
+	return fmt.Sprintf("<package-selector: %s>", l.Name)
 }
 
-func (l *LoadedPackage) Type() string {
-	return "loaded-package"
+func (l *PackageSelector) Type() string {
+	return "package-selector"
 }
 
-func (l *LoadedPackage) Freeze() {}
+func (l *PackageSelector) Freeze() {}
 
-func (l *LoadedPackage) Truth() exprcore.Bool {
+func (l *PackageSelector) Truth() exprcore.Bool {
 	return exprcore.True
 }
 
-func (l *LoadedPackage) Hash() (uint32, error) {
-	return exprcore.String(l.name).Hash()
+func (l *PackageSelector) Hash() (uint32, error) {
+	return exprcore.String(l.Name).Hash()
 }
 
-func (l *ProjectLoad) loadScript(name string) (*ScriptPackage, error) {
+func (l *ProjectLoad) loadScript(ctx context.Context, ns, name string) (*ScriptPackage, error) {
+	if l.path == nil {
+		err := l.setupPath(ctx, l.cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var sl ScriptLoad
 	sl.common = l.common
 
@@ -275,39 +347,11 @@ func (l *ProjectLoad) homebrewFn(thread *exprcore.Thread, b *exprcore.Builtin, a
 		return nil, err
 	}
 
-	return &LoadedPackage{name: name}, nil
+	return &PackageSelector{Name: name}, nil
 }
 
 func (s *ProjectLoad) importPkg(thread *exprcore.Thread, ns, name string, args *exprcore.Dict) (exprcore.Value, error) {
-	if ns == "homebrew" {
-		/*
-			cellar := homebrew.DefaultCellar()
-			err := os.MkdirAll(cellar, 0755)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			r, err := homebrew.NewResolver(cellar, "./gen/packages")
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			pkgs, err := homebrew.GetInstallables(r, cellar, name)
-			if err != nil {
-				return nil, err
-			}
-
-			var insts []Installable
-
-			for _, p := range pkgs {
-				insts = append(insts, p)
-			}
-		*/
-
-		return &LoadedPackage{name: name}, nil
-	}
-
-	return s.loadScript(name)
+	return s.loadScript(context.Background(), ns, name)
 }
 
 func (p *Project) Resolve() (*homebrew.Resolution, error) {

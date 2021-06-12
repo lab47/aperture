@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,7 +22,7 @@ type ScannedPackage struct {
 	Package *ScriptPackage
 }
 
-func (s *StoreScan) Scan(cfg *config.Config, validate bool) ([]*ScannedPackage, error) {
+func (s *StoreScan) Scan(ctx context.Context, cfg *config.Config, validate bool) ([]*ScannedPackage, error) {
 	store := cfg.StorePath()
 
 	f, err := os.Open(store)
@@ -74,10 +75,11 @@ func (s *StoreScan) Scan(cfg *config.Config, validate bool) ([]*ScannedPackage, 
 		return out, nil
 	}
 
-	return s.validate(cfg, out)
+	return s.validate(ctx, cfg, out)
 }
 
 func (s *StoreScan) validate(
+	ctx context.Context,
 	cfg *config.Config, out []*ScannedPackage,
 ) ([]*ScannedPackage, error) {
 	checked := map[string]*ScannedPackage{}
@@ -89,7 +91,7 @@ func (s *StoreScan) validate(
 	for _, sp := range out {
 		pkg, ok := pkgs[sp.Info.Name]
 		if !ok {
-			proj, err := pl.Single(cfg, sp.Info.Name)
+			proj, err := pl.Single(ctx, cfg, sp.Info.Name)
 			if err != nil {
 				if errors.Is(err, ErrNotFound) {
 					continue

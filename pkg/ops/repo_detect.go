@@ -1,13 +1,16 @@
 package ops
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
+	"lab47.dev/aperture/pkg/data"
 )
 
 type RepoDetect struct {
@@ -22,6 +25,20 @@ func (r *RepoDetect) Detect(path string) (string, error) {
 	id, ok := r.known[path]
 	if ok {
 		return id, nil
+	}
+
+	f, err := os.Open(filepath.Join(path, ".repo-info.json"))
+	if err == nil {
+		var ri data.RepoInfo
+
+		err = json.NewDecoder(f).Decode(&ri)
+		if err != nil {
+			return "", err
+		}
+
+		r.known[path] = ri.Id
+
+		return ri.Id, nil
 	}
 
 	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{

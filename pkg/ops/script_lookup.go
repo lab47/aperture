@@ -3,7 +3,6 @@ package ops
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pkg/errors"
 	"lab47.dev/aperture/pkg/repo"
 )
 
@@ -124,7 +124,7 @@ func (s *ScriptLookup) lookupInDir(root, dir, name string) (ScriptData, error) {
 		}
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
 }
 
 func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
@@ -144,7 +144,7 @@ func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
 	if fi, err := os.Stat(vendor); err == nil && fi.IsDir() {
 		vendored, err := os.ReadDir(vendor)
 		if err != nil {
-			return nil, ErrNotFound
+			return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
 		}
 
 		for _, fi := range vendored {
@@ -159,7 +159,7 @@ func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
 		}
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
 }
 
 func (s *ScriptLookup) LoadFile(path string) (ScriptData, error) {
@@ -174,7 +174,7 @@ func (s *ScriptLookup) LoadFile(path string) (ScriptData, error) {
 		return &dirScriptData{data: data, dir: dir, repo: repo}, nil
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.Wrapf(ErrNotFound, "looking for path '%s'", path)
 }
 
 type ghScriptData struct {
@@ -352,7 +352,7 @@ func (s *ScriptLookup) Load(name string) (ScriptData, error) {
 		return r, nil
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
 }
 
 func (s *ScriptLookup) loadGeneric(p, name string) (ScriptData, error) {
@@ -379,7 +379,7 @@ func (s *ScriptLookup) loadGeneric(p, name string) (ScriptData, error) {
 		}
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
 }
 
 func (s *ScriptLookup) loadVanity(client httpDo, repo, name string) (ScriptData, error) {

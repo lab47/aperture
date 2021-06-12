@@ -30,6 +30,7 @@ require (
 	github.com/stretchr/testify v1.7.0
 	github.com/ulikunitz/xz v0.5.10 // indirect
 	golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b
+	golang.org/x/mod v0.4.2 // indirect
 	golang.org/x/sys v0.0.0-20210521203332-0cec03c779c1
 	golang.org/x/text v0.3.6 // indirect
 	golang.org/x/tools v0.0.0-20210106214847-113979e3529a // indirect

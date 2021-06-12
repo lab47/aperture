@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5"
+	"lab47.dev/aperture/pkg/data"
 	"lab47.dev/aperture/pkg/metadata"
 	"lab47.dev/aperture/pkg/sumfile"
 )
@@ -73,6 +74,19 @@ func (d *Directory) parseGitUrl(url string) error {
 }
 
 func (d *Directory) detectRepoId() error {
+	f, err := os.Open(filepath.Join(d.rootPath, ".repo-info.json"))
+	if err == nil {
+		var ri data.RepoInfo
+
+		err = json.NewDecoder(f).Decode(&ri)
+		if err != nil {
+			return err
+		}
+
+		d.repoId = ri.Id
+		return nil
+	}
+
 	repo, err := git.PlainOpenWithOptions(d.rootPath, &git.PlainOpenOptions{
 		DetectDotGit: true,
 	})

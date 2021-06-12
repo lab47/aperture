@@ -1,3 +1,5 @@
+source("github.com/lab47/aperture-packages@main")
+
 import go
 
 install(

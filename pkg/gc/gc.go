@@ -88,10 +88,10 @@ func (c *Collector) markInUse() (map[string]struct{}, error) {
 	return seen, nil
 }
 
-func (c *Collector) MarkMinimal(cfg *config.Config) ([]string, error) {
+func (c *Collector) MarkMinimal(ctx context.Context, cfg *config.Config) ([]string, error) {
 	var ss ops.StoreScan
 
-	pkgs, err := ss.Scan(cfg, true)
+	pkgs, err := ss.Scan(ctx, cfg, true)
 	if err != nil {
 		return nil, err
 	}

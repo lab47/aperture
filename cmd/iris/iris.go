@@ -176,9 +176,9 @@ func installF(ctx context.Context, opts struct {
 	}
 
 	if opts.Pos.Package != "" {
-		proj, err = cl.Single(cfg, opts.Pos.Package)
+		proj, err = cl.Single(ctx, cfg, opts.Pos.Package)
 	} else {
-		proj, err = cl.Load(cfg)
+		proj, err = cl.Load(ctx, cfg)
 	}
 
 	if err != nil {
@@ -339,7 +339,7 @@ func shellF(ctx context.Context, opts struct {
 
 	var cl ops.ProjectLoad
 
-	proj, err := cl.Load(cfg)
+	proj, err := cl.Load(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -489,7 +489,7 @@ func publishCarF(ctx context.Context, opts struct {
 			cl   ops.ProjectLoad
 		)
 
-		proj, err = cl.Load(cfg)
+		proj, err = cl.Load(ctx, cfg)
 		if err != nil {
 			return err
 		}
@@ -565,7 +565,7 @@ func publishCarF(ctx context.Context, opts struct {
 			cl   ops.ProjectLoad
 		)
 
-		proj, err = cl.Single(cfg, opts.Package)
+		proj, err = cl.Single(ctx, cfg, opts.Package)
 		if err != nil {
 			return err
 		}
@@ -597,7 +597,7 @@ func publishCarF(ctx context.Context, opts struct {
 		return err
 	}
 
-	pkgs, err := ss.Scan(cfg, true)
+	pkgs, err := ss.Scan(ctx, cfg, true)
 	if err != nil {
 		return err
 	}
@@ -656,7 +656,7 @@ func gcF(ctx context.Context, opts struct {
 	var toKeep []string
 
 	if opts.Min {
-		toKeep, err = col.MarkMinimal(cfg)
+		toKeep, err = col.MarkMinimal(ctx, cfg)
 	} else {
 		toKeep, err = col.Mark()
 	}
@@ -738,6 +738,7 @@ func debugF(ctx context.Context, opts struct {
 	Trace       bool   `long:"trace" description:"log in trace mode"`
 	ShowCar     string `short:"c" long:"car" description:"attempt to discover a car file for a script"`
 	ExtractCar  bool   `long:"extract" description:"extract the car as well as inspecting it"`
+	Clone       string `long:"clone" description:"clone a package"`
 }) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -759,7 +760,7 @@ func debugF(ctx context.Context, opts struct {
 		var cl ops.ProjectLoad
 		cl.SetLogger(L)
 
-		proj, err := cl.Single(cfg, opts.Script)
+		proj, err := cl.Single(ctx, cfg, opts.Script)
 		if err != nil {
 			return err
 		}
@@ -805,9 +806,9 @@ func debugF(ctx context.Context, opts struct {
 		spew.Dump(store)
 
 		fmt.Printf("Loading for test install: %s\n", name)
-		fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
+		// fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
 
-		proj, err := cl.Single(cfg, name)
+		proj, err := cl.Single(ctx, cfg, name)
 		if err != nil {
 			return err
 		}
@@ -902,9 +903,9 @@ func debugF(ctx context.Context, opts struct {
 		}
 
 		fmt.Printf("Loading for test install: %s\n", pkgName)
-		fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
+		// fmt.Printf("Loading path: %s\n", strings.Join(cfg.LoadPath(), ":"))
 
-		proj, err := cl.Single(cfg, pkgName)
+		proj, err := cl.Single(ctx, cfg, pkgName)
 		if err != nil {
 			return err
 		}
@@ -978,6 +979,23 @@ func debugF(ctx context.Context, opts struct {
 			}
 		}
 
+		return nil
+	}
+
+	if opts.Clone != "" {
+		var pm config.PathMap
+		pm.Dir = "./path-map"
+
+		out, err := pm.Map(ctx, &config.PackagePath{
+			Type:    "git",
+			Name:    opts.Clone,
+			Version: "main",
+		})
+		if err != nil {
+			return err
+		}
+
+		fmt.Println(out)
 		return nil
 	}
 

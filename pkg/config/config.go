@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -342,19 +343,53 @@ func (c *Config) NamedPath() []PathPart {
 	return pp
 }
 
-func (c *Config) LoadPath() []string {
-	var pp []string
+func (c *Config) PackagePath() ([]*PackagePath, error) {
+	var pp []*PackagePath
 
 	for _, c := range strings.Split(c.Path, ":") {
 		idx := strings.IndexByte(c, '=')
+
+		var name, loc string
+
 		if idx == -1 {
-			pp = append(pp, c)
+			loc = c
 		} else {
-			pp = append(pp, c[idx+1:])
+			name = c[:idx]
+			loc = c[idx+1:]
 		}
+
+		path, err := CalcPath(name, loc)
+		if err != nil {
+			return nil, err
+		}
+
+		pp = append(pp, path)
 	}
 
-	return pp
+	return pp, nil
+}
+
+func (c *Config) MapPaths(ctx context.Context, pp []*PackagePath) ([]string, error) {
+	var out []string
+
+	var pm PathMap
+	pm.Dir = filepath.Join(c.configDir, "paths")
+
+	err := os.MkdirAll(pm.Dir, 0755)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, c := range pp {
+		dir, err := pm.Map(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, dir)
+	}
+
+	return out, nil
 }
 
 func (c *Config) Repo() repo.Repo {
