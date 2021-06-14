@@ -432,21 +432,6 @@ func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", script.ID()[:8], script.Name(), script.Version(), flag, deps)
 	}
 
-	res, err := p.Resolve()
-	if err != nil {
-		return err
-	}
-
-	for _, pkg := range res.ToInstall {
-		flag := " "
-		if pkg.Installed {
-			flag = "I"
-		}
-
-		ib := strings.Join(pkg.IncludedByNames, ", ")
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", pkg.Name, pkg.Version, flag, ib)
-	}
-
 	return nil
 }
 
@@ -495,61 +480,6 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 	err = pkgInst.Install(ctx, ienv, toInstall)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	res, err := p.Resolve()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	add := map[string]struct{}{}
-
-	for _, name := range p.homebrewPackages {
-		add[name] = struct{}{}
-	}
-
-	for _, rp := range res.ToInstall {
-		_, ok := add[rp.Name]
-		if ok && rp.Installed {
-			requested = append(requested, rp.Name)
-			toInstall.InstallDirs[rp.Name] =
-				filepath.Join(p.Cellar, rp.Name, rp.Version)
-		}
-	}
-
-	res.PruneInstalled()
-
-	urls, err := res.ComputeURLs()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if len(urls) > 0 {
-		var d homebrew.Downloader
-
-		hbtmp := filepath.Join(ienv.Store.Default, "_hb-cache")
-		err = os.MkdirAll(hbtmp, 0755)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		files, err := d.Stage(hbtmp, urls)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		for i, rp := range res.ToInstall {
-			u := urls[i]
-			pkgPath, err := p.install(ctx, rp, u.Binary, files[u.URL])
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if _, ok := add[rp.Name]; ok {
-				requested = append(requested, rp.Name)
-				toInstall.InstallDirs[rp.Name] = pkgPath
-			}
-		}
 	}
 
 	return requested, toInstall, nil
