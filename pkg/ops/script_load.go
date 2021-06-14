@@ -303,6 +303,7 @@ func (s *ScriptLoad) Load(name string, opts ...Option) (*ScriptPackage, error) {
 		"basename": exprcore.NewBuiltin("basename", basenameFn),
 		"fetch":    exprcore.NewBuiltin("fetch", s.fetchFn),
 		"sys":      sysobj,
+		"platform": &platform{},
 	}
 
 	_, prog, err := exprcore.SourceProgram(name+Extension, data.Script(), vars.Has)
