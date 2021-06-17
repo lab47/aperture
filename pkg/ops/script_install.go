@@ -214,6 +214,43 @@ func (i *ScriptInstall) setupInputs(ui *UI, ienv *InstallEnv, dir string) error 
 	return nil
 }
 
+var allCCNames = strings.Fields(`
+c++
+c89
+c99
+cc
+clang
+clang++
+cpp
+g++
+g++-10
+g++-4.2
+g++-4.9
+g++-5
+g++-6
+g++-7
+g++-8
+g++-9
+gcc
+gcc-10
+gcc-4.9
+gcc-5
+gcc-6
+gcc-7
+gcc-8
+gcc-9
+git
+i686-apple-darwin11-llvm-g++-4.2
+i686-apple-darwin11-llvm-gcc-4.2
+ld
+llvm-g++
+llvm-g++-4.2
+llvm-gcc
+llvm-gcc-4.2
+llvm_clang
+llvm_clang++
+`)
+
 func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	var thread exprcore.Thread
 
@@ -223,6 +260,8 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	ui.RunScript(i.pkg)
 
 	buildDir := filepath.Join(ienv.BuildDir, "build-"+i.pkg.ID())
+
+	tmpDir := filepath.Join(ienv.BuildDir, "tmp-"+i.pkg.ID())
 
 	targetDir := ienv.Store.ExpectedPath(i.pkg.ID())
 
@@ -241,8 +280,18 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 	}
 
+	err = os.Mkdir(tmpDir, 0755)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		err := os.Mkdir(tmpDir, 0755)
+		if err != nil {
+			return err
+		}
+	}
+
 	if !ienv.RetainBuild {
 		defer os.RemoveAll(buildDir)
+		defer os.RemoveAll(tmpDir)
 	}
 
 	err = os.Mkdir(targetDir, 0755)
@@ -307,6 +356,25 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 	}
 
+	iris, err := os.Executable()
+	if err != nil {
+		iris, err = exec.LookPath("iris")
+		if err != nil {
+			return err
+		}
+	}
+
+	buildBin := filepath.Join(tmpDir, "bin")
+
+	err = os.MkdirAll(buildBin, 0777)
+	if err != nil {
+		return err
+	}
+
+	for _, cc := range allCCNames {
+		os.Symlink(iris, filepath.Join(buildBin, cc))
+	}
+
 	var rc RunCtx
 	rc.ctx = ctx
 	rc.L = log
@@ -320,7 +388,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	args := exprcore.Tuple{&rc}
 
 	var (
-		path      []string
+		path      []string = []string{buildBin}
 		cflags    []string
 		ldflags   []string
 		pkgconfig []string
@@ -405,7 +473,12 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 
 	rc.path = strings.Join(path, ":")
 
-	environ := []string{"HOME=/nonexistant", "PATH=" + rc.path}
+	environ := []string{
+		"HOME=/nonexistant",
+		"PATH=" + rc.path,
+		"APERTURE_SHIM_PATH=" + buildBin,
+		"APERTURE_CC_LOG=" + filepath.Join(buildDir, "cc.log"),
+	}
 
 	if len(cflags) > 0 {
 		environ = append(environ, "CFLAGS="+strings.Join(cflags, " "))

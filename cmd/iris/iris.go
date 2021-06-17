@@ -25,6 +25,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
+	"lab47.dev/aperture/pkg/cc"
 	"lab47.dev/aperture/pkg/cmd"
 	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
@@ -38,6 +39,14 @@ import (
 )
 
 func main() {
+	if os.Args[0] != "iris" {
+		bi := os.Getenv("APERTURE_BUILD_INFO")
+		sp := os.Getenv("APERTURE_SHIM_PATH")
+
+		err := cc.Run(os.Args, bi, sp)
+		log.Fatal(err)
+	}
+
 	c := cli.NewCLI("iris", "0.1.0")
 	c.Args = os.Args[1:]
 	c.Commands = map[string]cli.CommandFactory{

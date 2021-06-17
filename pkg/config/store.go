@@ -16,16 +16,11 @@ type Store struct {
 var ErrNoEntry = errors.New("no store entry for id")
 
 func (s *Store) Locate(id string) (string, error) {
-outer:
 	for _, p := range s.Paths {
 		path := filepath.Join(p, id)
 
-		fi, err := os.Stat(path)
+		_, err := os.Stat(path)
 		if err == nil {
-			if !fi.IsDir() {
-				continue outer
-			}
-
 			return path, nil
 		}
 	}
@@ -75,6 +70,6 @@ func (s *Store) ExpectedPath(id string) string {
 }
 
 func (s *Store) Pivot(path string) {
-	s.PrependPath(path)
+	s.Paths = []string{path}
 	s.Default = path
 }

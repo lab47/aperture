@@ -3,6 +3,8 @@ package ops
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -75,7 +77,17 @@ type PackagesToInstall struct {
 }
 
 func (p *PackageCalcInstall) isInstalled(id string) (string, error) {
-	return p.Store.Locate(id)
+	path, err := p.Store.Locate(id)
+	if err != nil {
+		return "", err
+	}
+
+	_, err = os.Stat(filepath.Join(path, ".pkg-info.json"))
+	if err == nil {
+		return path, nil
+	}
+
+	return "", errors.Wrapf(config.ErrNoEntry, "no pkg-info detected for store dir: %s", path)
 }
 
 // runtimeDeps returns the packages that the given package needs at runtime. If pkg

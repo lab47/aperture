@@ -39,5 +39,9 @@ func CalcPath(name, ref string) (*PackagePath, error) {
 		}, nil
 	}
 
-	return nil, fmt.Errorf("Unknown ref type: %s", ref)
+	return &PackagePath{
+		Name:     name,
+		Type:     "local",
+		Location: ref,
+	}, nil
 }
