@@ -5,7 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"lab47.dev/aperture/pkg/rpath"
 )
 
 type PackageAdjustNames struct {
@@ -13,6 +16,14 @@ type PackageAdjustNames struct {
 }
 
 func (p *PackageAdjustNames) Adjust(dir string) error {
+	if runtime.GOOS == "darwin" {
+		return p.adjustMac(dir)
+	}
+
+	return p.adjustLinux(dir)
+}
+
+func (p *PackageAdjustNames) adjustMac(dir string) error {
 	path, err := exec.LookPath("install_name_tool")
 	if err != nil || path == "" {
 		return nil
@@ -82,4 +93,42 @@ func (p *PackageAdjustNames) Adjust(dir string) error {
 	}
 
 	return nil
+}
+
+func (p *PackageAdjustNames) adjustLinux(dir string) error {
+	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		if info.Mode().Perm()&0111 == 0 {
+			return nil
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+
+		defer f.Close()
+
+		// Read and decode ELF identifier
+		var ident [16]uint8
+		if _, err := f.ReadAt(ident[0:], 0); err != nil {
+			// not elf
+			return nil
+		}
+
+		if ident[0] != '\x7f' || ident[1] != 'E' || ident[2] != 'L' || ident[3] != 'F' {
+			// not elf
+			return nil
+		}
+
+		err = rpath.Shrink(path, []string{dir})
+		if err != nil {
+			p.L().Error("Error attempting to shrink rpath", "error", err)
+		}
+
+		return nil
+	})
 }
