@@ -49,7 +49,7 @@ func newWrapper(args []string, str string) (*wrapper, error) {
 		bi:    &bi,
 		arg0:  arg0,
 		given: args[1:],
-		mode:  calcMode(args),
+		mode:  calcMode(arg0, args),
 		mac:   runtime.GOOS == "darwin",
 	}
 
@@ -91,8 +91,8 @@ func includesPair(args []string, t1, t2 string) bool {
 
 var cxx_regexp = regexp.MustCompile(`(c|g|clang)\+\+`)
 
-func calcMode(args []string) string {
-	switch args[0] {
+func calcMode(arg0 string, args []string) string {
+	switch arg0 {
 	case "cpp":
 		return "cpp"
 	case "ld", "ld.gold", "gold":
@@ -100,7 +100,7 @@ func calcMode(args []string) string {
 	default:
 		switch {
 		case includes(args, "-c"):
-			if cxx_regexp.MatchString(args[0]) {
+			if cxx_regexp.MatchString(arg0) {
 				return "cxx"
 			}
 			return "cc"
@@ -108,7 +108,7 @@ func calcMode(args []string) string {
 			return "cxx"
 		case includes(args, "-E"):
 			return "ccE"
-		case cxx_regexp.MatchString(args[0]):
+		case cxx_regexp.MatchString(arg0):
 			return "cxxld"
 		default:
 			return "ccld"
