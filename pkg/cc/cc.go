@@ -393,7 +393,11 @@ func (w *wrapper) ldflags() []string {
 			return nil
 		}
 
-		return []string{"-rpath=" + path}
+		if w.mode == "ld" {
+			return []string{"-rpath=" + path}
+		} else {
+			return []string{"-Wl,-rpath=" + path}
+		}
 	}
 
 }
