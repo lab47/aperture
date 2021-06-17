@@ -382,7 +382,12 @@ func (w *wrapper) ldflags() []string {
 
 		return nil
 	} else {
-		rpath := []string{filepath.Join(w.bi.Prefix, "lib")}
+		// We have to pull out selfLib and always do it explicitly because
+		// joinPaths will prune out paths that don't exist and our lib path
+		// by definition does not yet exist but we still want it as an rpath.
+		selfLib := filepath.Join(w.bi.Prefix, "lib")
+
+		var rpath []string
 
 		for _, dep := range w.bi.Dependencies {
 			rpath = append(rpath, filepath.Join(dep.Path, "lib"))
@@ -390,7 +395,9 @@ func (w *wrapper) ldflags() []string {
 
 		path := joinPaths(rpath)
 		if path == "" {
-			return nil
+			path = selfLib
+		} else {
+			path = selfLib + ":" + path
 		}
 
 		if w.mode == "ld" {
