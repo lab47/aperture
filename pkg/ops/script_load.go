@@ -92,6 +92,19 @@ func (s *ScriptPackage) Version() string {
 	return s.cs.Version
 }
 
+func (s *ScriptPackage) Description() string {
+	return s.cs.Description
+}
+
+func (s *ScriptPackage) Metadata() map[string]string {
+	return s.cs.Metadata
+}
+
+// URL is the homepage for the project, not where to download it.
+func (s *ScriptPackage) URL() string {
+	return s.cs.URL
+}
+
 // String returns the string representation of the value.
 // exprcore string values are quoted as if by Python's repr.
 func (s *ScriptPackage) String() string {
@@ -202,6 +215,160 @@ func WithConfigRepo(cr *ConfigRepo) Option {
 type loadContext struct {
 	repo        *ConfigRepo
 	constraints map[string]string
+}
+
+func (s *ScriptLoad) matchQuery(query string, sp *ScriptPackage) bool {
+	if query == "" || sp.Name() == query {
+		return true
+	}
+
+	return false
+}
+
+func (s *ScriptLoad) Search(query string, opts ...Option) ([]*ScriptPackage, error) {
+	if s.loaded == nil {
+		s.loaded = make(map[string]*ScriptPackage)
+	}
+
+	if s.lookup == nil {
+		s.lookup = &ScriptLookup{}
+	}
+
+	var lc loadCfg
+
+	for _, o := range opts {
+		o(&lc)
+	}
+
+	var path string
+
+	if lc.configRepo != nil {
+		path = lc.configRepo.Path
+	}
+
+	var results []*ScriptPackage
+
+	err := s.lookup.Walk(func(name string, data ScriptData) error {
+		cacheKey := loadedKey(name, lc.namespace, lc.args, path)
+
+		sp, ok := s.loaded[cacheKey]
+		if ok {
+			if sp == nil {
+				return fmt.Errorf("recursive dependencies detected")
+			}
+
+			if s.matchQuery(query, sp) {
+				results = append(results, sp)
+			}
+
+			return nil
+		}
+
+		var (
+			cr *ConfigRepo = lc.configRepo
+		)
+
+		pkgobj := exprcore.FromStringDict(exprcore.Root, nil)
+
+		args := exprcore.NewDict(len(lc.args))
+
+		for k, v := range lc.args {
+			args.SetKey(exprcore.String(k), exprcore.String(v))
+		}
+
+		sysobj := exprcore.FromStringDict(exprcore.Root, exprcore.StringDict{
+			"platform": exprcore.String(runtime.GOARCH),
+		})
+
+		vars := exprcore.StringDict{
+			"pkg":      pkgobj,
+			"args":     args,
+			"file":     exprcore.NewBuiltin("file", s.fileFn),
+			"dir":      exprcore.NewBuiltin("dir", s.dirFn),
+			"inputs":   exprcore.NewBuiltin("inputs", s.inputsFn),
+			"join":     exprcore.NewBuiltin("join", joinFn),
+			"fmt":      exprcore.NewBuiltin("fmt", fmtFn),
+			"basename": exprcore.NewBuiltin("basename", basenameFn),
+			"fetch":    exprcore.NewBuiltin("fetch", s.fetchFn),
+			"sys":      sysobj,
+			"platform": &platform{},
+		}
+
+		_, prog, err := exprcore.SourceProgram(name+Extension, data.Script(), vars.Has)
+		if err != nil {
+			return err
+		}
+
+		var thread exprcore.Thread
+
+		lctx := &loadContext{
+			repo:        cr,
+			constraints: lc.constraints,
+		}
+
+		if cr != nil {
+			thread.Import = func(thread *exprcore.Thread, namespace, pkg string, args *exprcore.Dict) (exprcore.Value, error) {
+				return s.importUnderRepo(thread, lctx, namespace, pkg, args)
+			}
+		} else {
+			thread.Import = func(thread *exprcore.Thread, namespace, pkg string, args *exprcore.Dict) (exprcore.Value, error) {
+				return s.importPkg(thread, lctx, namespace, pkg, args)
+			}
+		}
+
+		thread.SetLocal("constraints", lc.constraints)
+		thread.SetLocal("script-data", data)
+
+		s.loaded[cacheKey] = nil
+
+		_, pkgval, err := prog.Init(&thread, vars)
+		if err != nil {
+			return err
+		}
+
+		ppkg, ok := pkgval.(*exprcore.Prototype)
+		if !ok {
+			return errors.Wrapf(ErrBadScript, "script '%s' did not return an object: %T", name, pkgval)
+		}
+
+		sp = &ScriptPackage{
+			requestName: name,
+			repo:        data.Repo(),
+			loader:      s,
+			constraints: lc.constraints,
+			prototype:   ppkg,
+			repoConfig:  data.RepoConfig(),
+		}
+
+		s.loaded[cacheKey] = sp
+
+		err = s.loadHelpers(sp, lctx, name, data, vars)
+		if err != nil {
+			return err
+		}
+
+		sp.cs.common.logger = s.common.logger
+
+		sig, id, err := sp.cs.Calculate(ppkg, sp.helpersSum, lc.constraints)
+		if err != nil {
+			return err
+		}
+
+		sp.sig = sig
+		sp.id = id
+
+		if s.matchQuery(query, sp) {
+			results = append(results, sp)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 func (s *ScriptLoad) Load(name string, opts ...Option) (*ScriptPackage, error) {

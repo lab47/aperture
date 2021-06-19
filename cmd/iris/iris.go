@@ -64,6 +64,13 @@ func main() {
 				installF,
 			), nil
 		},
+		"search": func() (cli.Command, error) {
+			return cmd.New(
+				"search",
+				"Search for packages",
+				searchF,
+			), nil
+		},
 		"shell": func() (cli.Command, error) {
 			return cmd.New(
 				"shell",
@@ -133,6 +140,57 @@ func setupF(ctx context.Context, opts struct{}) error {
 	}
 
 	fmt.Printf("User Signer Id: %s\n", id)
+
+	return nil
+}
+
+func searchF(ctx context.Context, opts struct {
+	JQ  bool `short:"j" description:"query using a jq-style string"`
+	Pos struct {
+		Query string `positional-arg-name:"query"`
+	} `positional-args:"yes"`
+}) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	var cl ops.ProjectLoad
+
+	_, err = cl.Load(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	var cond ops.SearchCond
+
+	if opts.JQ {
+		cond, err = ops.SearchJQ(opts.Pos.Query)
+		if err != nil {
+			return err
+		}
+	} else {
+		cond, err = ops.SearchRegexp(opts.Pos.Query)
+		if err != nil {
+			return err
+		}
+	}
+
+	results, err := cl.Search(ctx, cond)
+	if err != nil {
+		return err
+	}
+
+	for _, sp := range results {
+		fmt.Printf("%s: %s\n", sp.Name, sp.Description)
+		fmt.Printf("  version: %s\n", sp.Version)
+		fmt.Printf("  dependencies: %s\n", strings.Join(sp.Dependencies, ", "))
+
+		if sp.URL != "" {
+			fmt.Printf("  url: %s\n", sp.URL)
+		}
+		fmt.Println()
+	}
 
 	return nil
 }

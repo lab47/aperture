@@ -15,7 +15,10 @@ import (
 )
 
 // xcr == exprcore files
-const Extension = ".xcr"
+const (
+	Extension       = ".xcr"
+	ExportExtension = ".export" + Extension
+)
 
 var (
 	ErrNotFound = errors.New("entry not found")
@@ -160,6 +163,123 @@ func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
 	}
 
 	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
+}
+
+func (s *ScriptLookup) walkInDir(root, dir string, fn func(string, ScriptData) error) error {
+	repo, err := repo.Open(root)
+	if err != nil {
+		return err
+	}
+
+	top, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, ent := range top {
+		if filepath.Ext(ent.Name()) == Extension {
+			if strings.HasSuffix(ent.Name(), ExportExtension) {
+				continue
+			}
+
+			path := filepath.Join(dir, ent.Name())
+
+			data, err := ioutil.ReadFile(path)
+			if err != nil {
+				return err
+			}
+
+			sd := &dirScriptData{data: data, dir: dir, cfg: repo}
+
+			name := ent.Name()[:len(ent.Name())-len(Extension)]
+
+			err = fn(name, sd)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	pkgs := filepath.Join(dir, "packages")
+
+	if _, err := os.Stat(pkgs); err != nil {
+		s.L().Error("error", "error", err, "path", pkgs)
+		return err
+	}
+
+	return filepath.Walk(pkgs, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) != Extension {
+			return nil
+		}
+
+		if strings.HasSuffix(path, ExportExtension) {
+			return nil
+		}
+
+		data, err := ioutil.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		sd := &dirScriptData{data: data, dir: dir, cfg: repo}
+
+		base := filepath.Base(path)
+
+		name := base[:len(base)-len(Extension)]
+
+		err = fn(name, sd)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+func (s *ScriptLookup) WalkDir(dir string, fn func(string, ScriptData) error) error {
+	err := s.walkInDir(dir, dir, fn)
+	if err != nil {
+		return err
+	}
+
+	// Check for any vendored dirs and the search inside them.
+	// If a script in a vendored dir does an import, we'll consider this toplevel
+	// first before trying the vendored dirs. This allows vendors to contain
+	// more generic scripts that smoothly interact with more specific ones at
+	// the higher level.
+
+	vendor := filepath.Join(dir, "vendor")
+
+	if fi, err := os.Stat(vendor); err == nil && fi.IsDir() {
+		vendored, err := os.ReadDir(vendor)
+		if err != nil {
+			return err
+		}
+
+		for _, fi := range vendored {
+			if !fi.IsDir() {
+				continue
+			}
+
+			err := s.walkInDir(dir, filepath.Join(vendor, fi.Name()), fn)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *ScriptLookup) Walk(fn func(string, ScriptData) error) error {
+	for _, p := range s.Path {
+		err := s.WalkDir(p, fn)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *ScriptLookup) LoadFile(path string) (ScriptData, error) {

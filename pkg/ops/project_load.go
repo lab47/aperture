@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/itchyny/gojq"
 	"github.com/lab47/exprcore/exprcore"
 	"github.com/mitchellh/go-homedir"
 	"github.com/pkg/errors"
@@ -309,6 +311,102 @@ func (l *PackageSelector) Truth() exprcore.Bool {
 
 func (l *PackageSelector) Hash() (uint32, error) {
 	return exprcore.String(l.Name).Hash()
+}
+
+type SearchCond interface {
+	Match(ent *data.RepoEntry) bool
+}
+
+type searchRegexp struct {
+	re *regexp.Regexp
+}
+
+func (se *searchRegexp) Match(ent *data.RepoEntry) bool {
+	return se.re.MatchString(ent.Name)
+}
+
+func SearchRegexp(str string) (SearchCond, error) {
+	re, err := regexp.Compile(str)
+	if err != nil {
+		return nil, err
+	}
+
+	return &searchRegexp{re}, nil
+}
+
+type searchJQ struct {
+	code *gojq.Code
+}
+
+func (se *searchJQ) Match(ent *data.RepoEntry) bool {
+	data, err := json.Marshal(ent)
+	if err != nil {
+		panic(err)
+	}
+
+	var x interface{}
+
+	err = json.Unmarshal(data, &x)
+	if err != nil {
+		panic(err)
+	}
+
+	iter := se.code.Run(x)
+
+	v, ok := iter.Next()
+	if !ok {
+		return false
+	}
+
+	if b, ok := v.(bool); ok {
+		return b
+	}
+
+	return false
+}
+
+func SearchJQ(str string) (SearchCond, error) {
+	p, err := gojq.Parse(str)
+	if err != nil {
+		return nil, err
+	}
+	code, err := gojq.Compile(p)
+	if err != nil {
+		return nil, err
+	}
+
+	return &searchJQ{code}, nil
+}
+
+func (l *ProjectLoad) Search(ctx context.Context, code SearchCond) ([]*data.RepoEntry, error) {
+	if l.path == nil {
+		err := l.setupPath(ctx, l.cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var results []*data.RepoEntry
+
+	for _, path := range l.path {
+		var rri RepoReadIndex
+		rri.common = l.common
+		rri.path = path
+
+		idx, err := rri.Read()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, ent := range idx.Entries {
+			if code.Match(&ent) {
+				ent := ent // to make a copy so we can take it's address
+				results = append(results, &ent)
+			}
+		}
+	}
+
+	return results, nil
 }
 
 func (l *ProjectLoad) loadScript(ctx context.Context, ns, name string) (*ScriptPackage, error) {
@@ -639,4 +737,8 @@ func (p *Project) install(
 	}
 
 	return pkgPath, nil
+}
+
+type SearchResult struct {
+	Results []string
 }

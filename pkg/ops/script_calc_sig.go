@@ -30,12 +30,24 @@ type ScriptCalcSig struct {
 
 	Name         string
 	Version      string
+	Description  string
+	URL          string
+	Metadata     map[string]string
 	Install      *exprcore.Function
 	Hook         *exprcore.Function
 	PostInstall  *exprcore.Function
 	Inputs       []ScriptInput
 	Dependencies []*ScriptPackage
 	Instances    []*Instance
+}
+
+func exprString(val exprcore.Value) string {
+	switch v := val.(type) {
+	case exprcore.String:
+		return string(v)
+	default:
+		return v.String()
+	}
 }
 
 func (s *ScriptCalcSig) extract(proto *exprcore.Prototype) error {
@@ -57,7 +69,31 @@ func (s *ScriptCalcSig) extract(proto *exprcore.Prototype) error {
 
 	s.Version = ver
 
-	val, err := proto.Attr("input")
+	s.Description, err = lang.StringValue(proto.Attr("description"))
+	if err != nil {
+		return err
+	}
+
+	s.URL, err = lang.StringValue(proto.Attr("url"))
+	if err != nil {
+		return err
+	}
+
+	val, err := proto.Attr("metadata")
+	if err == nil {
+		m, ok := val.(exprcore.IterableMapping)
+		if ok {
+			metadata := map[string]string{}
+
+			for _, items := range m.Items() {
+				metadata[exprString(items[0])] = exprString(items[1])
+			}
+
+			s.Metadata = metadata
+		}
+	}
+
+	val, err = proto.Attr("input")
 	if err != nil {
 		if _, ok := err.(exprcore.NoSuchAttrError); ok {
 			val = nil
