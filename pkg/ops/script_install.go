@@ -239,7 +239,6 @@ gcc-6
 gcc-7
 gcc-8
 gcc-9
-git
 i686-apple-darwin11-llvm-g++-4.2
 i686-apple-darwin11-llvm-gcc-4.2
 ld
