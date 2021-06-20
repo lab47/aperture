@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -12,20 +13,24 @@ type PackageFixPerms struct {
 // Fix adjusts the permissions of the files in path. Mostly it
 // fixes the perms of anything in the bin/ dir.
 func (p *PackageFixPerms) Fix(path string) error {
-	paths, err := os.ReadDir(filepath.Join(path, "bin"))
+	binPath := filepath.Join(path, "bin")
+
+	paths, err := ioutil.ReadDir(binPath)
 	if err != nil {
 		return nil
 	}
 
 	for _, ent := range paths {
-		if ent.Type().IsRegular() {
-			cur := ent.Type().Perm()
+		if ent.Mode().IsRegular() {
+			cur := ent.Mode().Perm()
 
-			if cur&0111 != 0111 {
-				err := os.Chmod(filepath.Join(path, ent.Name()), cur|0111)
-				if err != nil {
-					return err
-				}
+			tgt := filepath.Join(binPath, ent.Name())
+
+			newPerms := (cur | 0111)
+
+			err := os.Chmod(tgt, newPerms)
+			if err != nil {
+				return err
 			}
 		}
 	}
