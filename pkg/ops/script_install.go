@@ -589,6 +589,14 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 				log.Error("Error adjusting library names", "error", perr)
 			}
 
+			var pfp PackageFixPerms
+			pfp.common = i.common
+
+			perr = pfp.Fix(targetDir)
+			if perr != nil {
+				log.Error("Error adjusting permissions", "error", perr)
+			}
+
 			var pan PackageAdjustNames
 			pan.common = i.common
 
