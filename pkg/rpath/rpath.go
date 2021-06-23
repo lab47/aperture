@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 // Shrink opens an ELF binary at path and minimizes the declared rpath to only include
@@ -17,7 +19,7 @@ func Shrink(path string, keep []string) error {
 
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "attempting to read shared library (%s)", fi.Mode().Perm().String())
 	}
 
 	ef, err := ParseELF64File(data)
@@ -144,12 +146,12 @@ outer:
 
 	err = os.Chmod(path, perm&0200)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "attempting to chmod the file: %s", perm.String())
 	}
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, perm&0200)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "attempting to open the file for rewrite")
 	}
 
 	defer f.Close()
