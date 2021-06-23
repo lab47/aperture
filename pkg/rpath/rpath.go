@@ -92,6 +92,10 @@ func Shrink(path string, keep []string) error {
 
 outer:
 	for _, dir := range parts {
+		if len(dir) < 1 {
+			continue
+		}
+
 		// Presume the user was doing something... interesting if the rpath doesn't use
 		// absolute paths (Could also be $ORIGIN), and just don't prune it.
 		if dir[0] != '/' {
