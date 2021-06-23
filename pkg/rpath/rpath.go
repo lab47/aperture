@@ -158,12 +158,12 @@ outer:
 		return err
 	}
 
-	f.Close()
-
 	err = f.Chmod(perm)
 	if err != nil {
 		return err
 	}
+
+	f.Close()
 
 	return os.Rename(tmp, path)
 }
