@@ -144,12 +144,9 @@ outer:
 
 	perm := fi.Mode().Perm()
 
-	err = os.Chmod(path, perm&0200)
-	if err != nil {
-		return errors.Wrapf(err, "attempting to chmod the file: %s", perm.String())
-	}
+	tmp := path + ".tmp"
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, perm&0200)
+	f, err := os.Create(tmp)
 	if err != nil {
 		return errors.Wrapf(err, "attempting to open the file for rewrite")
 	}
@@ -161,5 +158,12 @@ outer:
 		return err
 	}
 
-	return f.Chmod(perm)
+	f.Close()
+
+	err = f.Chmod(perm)
+	if err != nil {
+		return err
+	}
+
+	return os.Rename(tmp, path)
 }
