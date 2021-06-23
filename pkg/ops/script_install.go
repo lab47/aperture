@@ -463,6 +463,12 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 				pkgconfig = append(pkgconfig, pcpath)
 			}
 		}
+
+		shpkg := filepath.Join(depDir, "share", "pkgconfig")
+		if _, err := os.Stat(shpkg); err == nil {
+			pkgconfig = append(pkgconfig, shpkg)
+		}
+
 		if includeCmake {
 			cmakePrefix = append(cmakePrefix, depDir)
 		}

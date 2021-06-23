@@ -5,8 +5,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"lab47.dev/aperture/pkg/config"
+	"lab47.dev/aperture/pkg/pkgconfig"
 )
 
 type StoreFindDeps struct {
@@ -61,11 +63,41 @@ func (s *StoreFindDeps) PruneDeps(id string, deps []*ScriptPackage) ([]*ScriptPa
 		return nil
 	})
 
+	refPkgs := map[string]struct{}{}
+
+	configs, err := pkgconfig.LoadAll(path)
+	if err == nil {
+		for _, cfg := range configs {
+			for _, sel := range cfg.Requires {
+				name := strings.Fields(sel)[0]
+				refPkgs[name] = struct{}{}
+			}
+		}
+	}
+
 	var runtimeDeps []*ScriptPackage
 
 	for _, sp := range deps {
 		if _, ok := seen[sp.Signature()]; ok {
 			runtimeDeps = append(runtimeDeps, sp)
+		} else {
+			// See if it's a pkg-config ref'd package
+
+			subPath, err := s.store.Locate(sp.ID())
+			if err != nil {
+				return nil, err
+			}
+
+			configs, err := pkgconfig.LoadAll(subPath)
+			if err != nil {
+				return nil, err
+			}
+
+			for _, cfg := range configs {
+				if _, ok := refPkgs[cfg.Id]; ok {
+					runtimeDeps = append(runtimeDeps, sp)
+				}
+			}
 		}
 	}
 
