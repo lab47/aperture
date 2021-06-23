@@ -140,19 +140,19 @@ outer:
 		pos[start+i] = 0
 	}
 
+	perm := fi.Mode().Perm()
+
+	err = os.Chmod(path, perm&0200)
+	if err != nil {
+		return err
+	}
+
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
 	if err != nil {
 		return err
 	}
 
 	defer f.Close()
-
-	perm := fi.Mode().Perm()
-
-	err = f.Chmod(perm & 0200)
-	if err != nil {
-		return err
-	}
 
 	_, err = f.Write(ef.Raw)
 	if err != nil {
