@@ -147,12 +147,7 @@ outer:
 
 	defer f.Close()
 
-	si, err := f.Stat()
-	if err != nil {
-		return err
-	}
-
-	perm := si.Mode().Perm()
+	perm := fi.Mode().Perm()
 
 	err = f.Chmod(perm & 0200)
 	if err != nil {
