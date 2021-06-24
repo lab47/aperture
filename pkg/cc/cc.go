@@ -389,15 +389,17 @@ func (w *wrapper) ldflags() []string {
 
 		var rpath []string
 
+		// We use /. on the end here to confuse any tools that might try to match
+		// on the directory and remove it (*cough* meson *cough*)
 		for _, dep := range w.bi.Dependencies {
-			rpath = append(rpath, filepath.Join(dep.Path, "lib"))
+			rpath = append(rpath, filepath.Join(dep.Path, "lib")+"/.")
 		}
 
 		path := joinPaths(rpath)
 		if path == "" {
-			path = selfLib
+			path = selfLib + "/."
 		} else {
-			path = selfLib + ":" + path
+			path = selfLib + "/.:" + path
 		}
 
 		if w.mode == "ld" {

@@ -105,6 +105,13 @@ outer:
 			continue
 		}
 
+		// We put /. on the end of our inject rpath entries so that tools like meson
+		// don't trim them away with their own logic. Because we're past that part of
+		// the process though, we can remove them now and use more convential paths
+		if strings.HasSuffix(dir, "/.") {
+			dir = dir[:len(dir)-2]
+		}
+
 		// Always include the paths we request to always keep.
 		for _, prefix := range keep {
 			if strings.HasPrefix(prefix, dir) {
