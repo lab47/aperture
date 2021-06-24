@@ -69,6 +69,9 @@ func (s *StoreFindDeps) PruneDeps(id string, deps []*ScriptPackage) ([]*ScriptPa
 	if err == nil {
 		for _, cfg := range configs {
 			for _, sel := range cfg.Requires {
+				if strings.TrimSpace(sel) == "" {
+					continue
+				}
 				name := strings.Fields(sel)[0]
 				refPkgs[name] = struct{}{}
 			}
