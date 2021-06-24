@@ -15,6 +15,7 @@ type BuildInfo struct {
 }
 
 type BuildInfoDependency struct {
+	Name    string `json:"name"`
 	Version string `json:"version"`
 	ID      string `json:"id"`
 	Path    string `json:"path"`

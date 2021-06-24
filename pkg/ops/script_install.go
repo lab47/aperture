@@ -425,6 +425,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		}
 
 		dr := &data.BuildInfoDependency{
+			Name:         dep.Name(),
 			Version:      dep.Version(),
 			ID:           dep.ID(),
 			Path:         depDir,
@@ -437,7 +438,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 			}
 		}
 
-		bi.Dependencies[dep.Name()] = dr
+		bi.Dependencies[dep.ID()] = dr
 
 		binpath := filepath.Join(depDir, "bin")
 
