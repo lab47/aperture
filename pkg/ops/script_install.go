@@ -370,10 +370,6 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		return err
 	}
 
-	for _, cc := range allCCNames {
-		os.Symlink(iris, filepath.Join(buildBin, cc))
-	}
-
 	var rc RunCtx
 	rc.ctx = ctx
 	rc.L = log
@@ -387,7 +383,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	args := exprcore.Tuple{&rc}
 
 	var (
-		path      []string = []string{buildBin}
+		path      []string
 		cflags    []string
 		ldflags   []string
 		pkgconfig []string
@@ -479,9 +475,17 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 
 	rc.path = strings.Join(path, ":")
 
+	for _, cc := range allCCNames {
+		if _, err := lookPath(cc, rc.path); err == nil {
+			os.Symlink(iris, filepath.Join(buildBin, cc))
+		}
+	}
+
 	environ := []string{
 		"HOME=/nonexistant",
-		"PATH=" + rc.path,
+		// readd buildBin here so that our above detection code doesn't
+		// consider it when trying to detect which compilers are available.
+		"PATH=" + buildBin + ":" + rc.path,
 		"APERTURE_SHIM_PATH=" + buildBin,
 		"APERTURE_CC_LOG=" + filepath.Join(buildDir, "cc.log"),
 	}
