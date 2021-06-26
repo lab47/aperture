@@ -42,8 +42,9 @@ func main() {
 	if os.Args[0] != "iris" {
 		bi := os.Getenv("APERTURE_BUILD_INFO")
 		sp := os.Getenv("APERTURE_SHIM_PATH")
+		cp := os.Getenv("APERTURE_CC_CACHE")
 
-		err := cc.Run(os.Args, bi, sp)
+		err := cc.Run(os.Args, bi, sp, cp)
 		log.Fatal(err)
 	}
 

@@ -1,12 +1,14 @@
 package cc
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/hashicorp/go-hclog"
+	"github.com/mr-tron/base58/base58"
 	"golang.org/x/sys/unix"
 	"lab47.dev/aperture/pkg/data"
 )
@@ -31,16 +34,18 @@ type wrapper struct {
 }
 
 func newWrapper(args []string, str string) (*wrapper, error) {
-	serData, err := base64.StdEncoding.DecodeString(str)
-	if err != nil {
-		return nil, err
-	}
-
 	var bi data.BuildInfo
 
-	err = json.Unmarshal(serData, &bi)
-	if err != nil {
-		return nil, err
+	if str != "" {
+		serData, err := base64.StdEncoding.DecodeString(str)
+		if err != nil {
+			return nil, err
+		}
+
+		err = json.Unmarshal(serData, &bi)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	arg0 := filepath.Base(args[0])
@@ -498,7 +503,7 @@ func LookPath(file string, path string) (string, error) {
 	return "", fmt.Errorf("not found")
 }
 
-func Run(args []string, info, shimPath string) error {
+func Run(args []string, info, shimPath, cachePath string) error {
 	var logw io.WriteCloser = os.Stderr
 
 	logPath := os.Getenv("APERTURE_CC_LOG")
@@ -532,10 +537,33 @@ func Run(args []string, info, shimPath string) error {
 
 	newArgs := w.newArgs()
 
-	L.Info("processing tool", "mode", w.mode, "dir", dir, "mac", w.mac, "arg0", w.arg0, "given", spew.Sdump(w.given), "new-args", spew.Sdump(newArgs), "config", spew.Sdump(w.bi))
+	updated := append([]string{w.arg0}, newArgs...)
+
+	var (
+		output    string
+		cacheInfo string
+	)
+
+	cache, err := NewCache(cachePath)
+	if err == nil {
+		output, cacheInfo, err = cache.CalculateCacheInfo(context.Background(), updated)
+		if err == nil {
+			found, err := cache.Retrieve(cacheInfo, output)
+			if found && err == nil {
+				L.Info("retrieved value from cache", "cache-info", cacheInfo, "output", output, "args", spew.Sdump(updated))
+				os.Exit(0)
+				return nil
+			}
+		} else {
+			L.Error("error analyzing arguments", "error", err)
+		}
+	} else {
+		L.Error("cache disabled via error", "error", err)
+	}
+
+	L.Info("processing tool", "mode", w.mode, "dir", dir, "mac", w.mac, "arg0", w.arg0, "given", spew.Sdump(w.given), "new-args", spew.Sdump(updated), "config", spew.Sdump(w.bi), "cache-info", cacheInfo)
 
 	t := w.arg0
-	updated := append([]string{w.arg0}, newArgs...)
 
 	var (
 		env  []string
@@ -544,7 +572,12 @@ func Run(args []string, info, shimPath string) error {
 
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "PATH=") {
-			updated := strings.ReplaceAll(e, shimPath+":", "")
+			updated := e
+
+			if shimPath != "" {
+				updated = strings.ReplaceAll(e, shimPath+":", "")
+			}
+
 			path = updated[5:]
 			env = append(env, updated)
 		} else {
@@ -552,15 +585,44 @@ func Run(args []string, info, shimPath string) error {
 		}
 	}
 
-	exec, err := LookPath(t, path)
+	execPath, err := LookPath(t, path)
 	if err != nil {
-		L.Error("error in looking up tool", "error", err, "tool", t)
+		L.Error("error in looking up tool", "error", err, "tool", t, "path", path)
 		return err
 	}
 
-	L.Info("executing tool", "exec", exec, "args", updated, "env", env)
+	L.Info("executing tool", "exec", execPath, "args", updated, "env", env, "output", output)
 
-	logw.Close()
+	if cacheInfo == "" || output == "" {
+		logw.Close()
 
-	return unix.Exec(exec, updated, env)
+		return unix.Exec(execPath, updated, env)
+	}
+
+	ds := exec.Command(execPath, updated[1:]...)
+	ds.Stdin = os.Stdin
+	ds.Stdout = os.Stdout
+	ds.Stderr = os.Stderr
+
+	err = ds.Run()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			os.Exit(ee.ExitCode())
+			return nil
+		} else {
+			return err
+		}
+	}
+
+	sum, err := cache.Store(cacheInfo, output)
+	if err != nil {
+		L.Error("error storing to cache", "err", err)
+	} else {
+		outputKey := base58.Encode(sum)
+		L.Info("output info", "path", output, "sum", outputKey)
+	}
+
+	os.Exit(0)
+
+	return nil
 }

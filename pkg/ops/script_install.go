@@ -487,7 +487,8 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		// consider it when trying to detect which compilers are available.
 		"PATH=" + buildBin + ":" + rc.path,
 		"APERTURE_SHIM_PATH=" + buildBin,
-		"APERTURE_CC_LOG=" + filepath.Join(buildDir, "cc.log"),
+		"APERTURE_CC_LOG=" + filepath.Join(ienv.BuildDir, i.pkg.Name()+"-cc.log"),
+		"APERTURE_CC_CACHE=" + filepath.Join(ienv.BuildDir, "cache-"+i.pkg.Name()),
 	}
 
 	if len(cflags) > 0 {

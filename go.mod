@@ -15,7 +15,7 @@ require (
 	github.com/itchyny/gojq v0.12.4
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/jmespath/go-jmespath v0.0.0-20160803190731-bd40a432e4c7 // indirect
-	github.com/klauspost/compress v1.12.2 // indirect
+	github.com/klauspost/compress v1.13.1
 	github.com/lab47/exprcore v0.0.0-20210226035030-9b644201f87c
 	github.com/mattn/go-runewidth v0.0.13 // indirect
 	github.com/mitchellh/cli v1.1.2
