@@ -174,14 +174,11 @@ func Analyze(args []string) (*AnalyzedOperation, error) {
 			return co.name >= check
 		})
 
-		if idx == max {
-			if len(arg) > 0 && arg[0] != '-' {
-				ao.Inputs = append(ao.Inputs, arg)
-			}
-			continue
-		}
+		var co CompOpt
 
-		co := knownOptions[idx]
+		if idx < max {
+			co = knownOptions[idx]
+		}
 
 		var val string
 
@@ -202,6 +199,10 @@ func Analyze(args []string) (*AnalyzedOperation, error) {
 				val = args[i]
 			}
 		} else {
+			if len(arg) > 0 && arg[0] != '-' {
+				ao.Inputs = append(ao.Inputs, arg)
+			}
+
 			ao.Common = append(ao.Common, arg)
 			ao.Processed = append(ao.Processed, arg)
 			continue

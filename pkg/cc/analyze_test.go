@@ -124,5 +124,47 @@ func TestAnalyze(t *testing.T) {
 		assert.NoError(t, op.Cachable())
 
 		assert.Equal(t, "crypto/ec/ecp_oct.o", op.Output())
+
+		args = []string{
+			"g++-9",
+			"-DCURL_STATICLIB",
+			"-DLIBARCHIVE_STATIC",
+			"-I/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Source",
+			"-I/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Source/LexerParser",
+			"-I/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Source/CTest",
+			"-I/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Source/CPack",
+			"-isystem",
+			"/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Utilities/std",
+			"-isystem",
+			"/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Utilities",
+			"-Os",
+			"-Wno-error",
+			"-pipe",
+			"-march=native",
+			"-O3",
+			"-DNDEBUG",
+			"-std=c++17",
+			"-MD",
+			"-MT",
+			"Source/CMakeFiles/CMakeLib.dir/cmConfigureFileCommand.cxx.o",
+			"-MF",
+			"CMakeFiles/CMakeLib.dir/cmConfigureFileCommand.cxx.o.d",
+			"-o",
+			"CMakeFiles/CMakeLib.dir/cmConfigureFileCommand.cxx.o",
+			"-c",
+			"/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Source/cmConfigureFileCommand.cxx",
+		}
+
+		op, err = Analyze(args)
+		require.NoError(t, err)
+
+		assert.NoError(t, op.Cachable())
+
+		assert.Equal(t, []string{"CMakeFiles/CMakeLib.dir/cmConfigureFileCommand.cxx.o"}, op.Outputs)
+		assert.Equal(t, []string{"/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Source/cmConfigureFileCommand.cxx"}, op.Inputs)
 	})
 }
+
+/*
+
+ */
