@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/klauspost/compress/zstd"
 	"github.com/mr-tron/base58"
 	"golang.org/x/crypto/blake2b"
@@ -25,7 +26,7 @@ func NewCache(root string) (*Cache, error) {
 
 var ErrNotCacheable = errors.New("not cacheable")
 
-func (c *Cache) CalculateCacheInfo(ctx context.Context, args []string) (string, string, error) {
+func (c *Cache) CalculateCacheInfo(ctx context.Context, L hclog.Logger, args []string) (string, string, error) {
 	op, err := Analyze(args)
 	if err != nil {
 		return "", "", err
@@ -71,6 +72,14 @@ func (c *Cache) CalculateCacheInfo(ctx context.Context, args []string) (string, 
 		}
 
 		h.Write(line)
+	}
+
+	err = cmd.Wait()
+	if err != nil {
+		L.Error("error detected running preprocessing", "args", newArgs, "error", err)
+		return "", "", err
+	} else {
+		L.Info("executed preprocessor", "args", newArgs)
 	}
 
 	h.Write(op.Nonce())

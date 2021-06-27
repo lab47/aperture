@@ -546,7 +546,7 @@ func Run(args []string, info, shimPath, cachePath string) error {
 
 	cache, err := NewCache(cachePath)
 	if err == nil {
-		output, cacheInfo, err = cache.CalculateCacheInfo(context.Background(), updated)
+		output, cacheInfo, err = cache.CalculateCacheInfo(context.Background(), L, updated)
 		if err == nil {
 			found, err := cache.Retrieve(cacheInfo, output)
 			if found && err == nil {
