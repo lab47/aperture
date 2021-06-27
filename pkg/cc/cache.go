@@ -2,7 +2,6 @@ package cc
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -41,10 +40,6 @@ func (c *Cache) CalculateCacheInfo(ctx context.Context, L hclog.Logger, args []s
 
 	cmd := exec.CommandContext(ctx, newArgs[0], newArgs[1:]...)
 
-	var errBuf bytes.Buffer
-
-	cmd.Stderr = &errBuf
-
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", "", err
@@ -62,6 +57,7 @@ func (c *Cache) CalculateCacheInfo(ctx context.Context, L hclog.Logger, args []s
 	for {
 		line, err := br.ReadSlice('\n')
 		if err != nil {
+			out.Close()
 			break
 		}
 
