@@ -250,6 +250,10 @@ func Analyze(args []string) (*AnalyzedOperation, error) {
 	return &ao, nil
 }
 
+var supportedExts = map[string]struct{}{
+	".c": {}, ".cc": {}, ".cp": {}, ".cpp": {}, ".CPP": {}, ".cxx": {}, ".c++": {}, ".C": {}, ".m": {}, ".M": {}, ".mm": {}, ".S": {}, ".sx": {},
+}
+
 func (a *AnalyzedOperation) Cachable() error {
 	if a.Condition&Compile != Compile {
 		return errors.Wrapf(ErrNotCacheable, "not compiling")
@@ -261,6 +265,13 @@ func (a *AnalyzedOperation) Cachable() error {
 
 	if len(a.Inputs) != 1 {
 		return errors.Wrapf(ErrNotCacheable, "not only one input: %d", len(a.Inputs))
+	}
+
+	input := a.Inputs[0]
+
+	_, ok := supportedExts[filepath.Ext(input)]
+	if !ok {
+		return errors.Wrapf(ErrNotCacheable, "unsupported input type: %s", input)
 	}
 
 	if len(a.Known["-o"]) > 1 {
