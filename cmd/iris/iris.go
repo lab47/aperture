@@ -432,7 +432,7 @@ func shellF(ctx context.Context, opts struct {
 
 	defer cleanup()
 
-	requested, toInstall, err := proj.InstallPackages(ctx, ienv)
+	requested, toInstall, _, err := proj.InstallPackages(ctx, ienv)
 	if err != nil {
 		return err
 	}
@@ -920,7 +920,7 @@ func debugF(ctx context.Context, opts struct {
 			return err
 		}
 
-		_, _, err = proj.InstallPackages(ctx, ienv)
+		_, _, _, err = proj.InstallPackages(ctx, ienv)
 		return err
 	}
 
