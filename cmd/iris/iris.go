@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -22,6 +23,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/hashicorp/go-hclog"
 	"github.com/mitchellh/cli"
+	"github.com/morikuni/aec"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
@@ -201,6 +203,7 @@ func installF(ctx context.Context, opts struct {
 	Export  string `long:"export" description:"write .car files to the given directory"`
 	Publish bool   `long:"publish" description:"publish exported car files to repo"`
 	Global  bool   `short:"G" long:"global" description:"install into the user's global profile"`
+	Build   bool   `short:"B" long:"build-only" description:"build packages only, don't manage any profiles"`
 
 	Pos struct {
 		Package string `positional-arg-name:"name"`
@@ -297,7 +300,7 @@ func installF(ctx context.Context, opts struct {
 		ienv.ExportPath = exportDir
 	}
 
-	requested, toInstall, err := proj.InstallPackages(ctx, ienv)
+	requested, toInstall, stats, err := proj.InstallPackages(ctx, ienv)
 	if err != nil {
 		return err
 	}
@@ -306,33 +309,37 @@ func installF(ctx context.Context, opts struct {
 		return publishCars(ctx, cfg, ienv.ExportedCars)
 	}
 
-	prof, err := profile.OpenProfile(cfg, profilePath)
-	if err != nil {
-		return err
-	}
+	if !opts.Build {
+		prof, err := profile.OpenProfile(cfg, profilePath)
+		if err != nil {
+			return err
+		}
 
-	for _, id := range requested {
-		err = prof.Link(id, toInstall.InstallDirs[id])
+		for _, id := range requested {
+			err = prof.Link(id, toInstall.InstallDirs[id])
+			if err != nil {
+				return err
+			}
+		}
+
+		if opts.Pos.Package != "" {
+			err = prof.Add()
+		} else {
+			err = prof.Commit()
+		}
+
 		if err != nil {
 			return err
 		}
 	}
 
-	if opts.Pos.Package != "" {
-		err = prof.Add()
-	} else {
-		err = prof.Commit()
-	}
-
-	if err != nil {
-		return err
-	}
-
-	updates := prof.UpdateEnv(os.Environ())
-
-	for _, u := range updates {
-		fmt.Println(u)
-	}
+	fmt.Println(
+		aec.Bold.Apply(
+			fmt.Sprintf("🔥 Finished installing! %d new packages, %d existing packages (elapse: %s)",
+				stats.Installed, stats.Existing, stats.Elapsed.Round(time.Second).String(),
+			),
+		),
+	)
 
 	return nil
 }

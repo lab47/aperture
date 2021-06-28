@@ -42,7 +42,6 @@ func (c *Cache) CalculateCacheInfo(ctx context.Context, L hclog.Logger, args []s
 	execPath, err := LookPath(newArgs[0], c.path)
 
 	cmd := exec.CommandContext(ctx, execPath, newArgs[1:]...)
-	cmd.Args[0] = newArgs[0]
 
 	out, err := cmd.StdoutPipe()
 	if err != nil {

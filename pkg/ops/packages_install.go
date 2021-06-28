@@ -21,7 +21,18 @@ type PackagesInstall struct {
 	Failed    string
 }
 
-func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInstall *PackagesToInstall) error {
+type InstallStats struct {
+	Existing  int
+	Installed int
+
+	Elapsed time.Duration
+}
+
+func (p *PackagesInstall) Install(
+	ctx context.Context, ienv *InstallEnv, toInstall *PackagesToInstall,
+) (*InstallStats, error) {
+	var is InstallStats
+
 	p.ienv = ienv
 
 	if toInstall.InstallDirs == nil {
@@ -42,8 +53,11 @@ func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInsta
 
 	for i, id := range toInstall.InstallOrder {
 		if toInstall.Installed[id] {
+			is.Existing++
 			continue
 		}
+
+		is.Installed++
 
 		storeDir := p.ienv.Store.ExpectedPath(id)
 		toInstall.InstallDirs[id] = storeDir
@@ -70,11 +84,13 @@ func (p *PackagesInstall) Install(ctx context.Context, ienv *InstallEnv, toInsta
 			if !ienv.RetainBuild {
 				os.RemoveAll(storeDir)
 			}
-			return err
+			return nil, err
 		}
 
 		p.Installed = append(p.Installed, id)
 	}
 
-	return nil
+	is.Elapsed = time.Since(start)
+
+	return &is, nil
 }

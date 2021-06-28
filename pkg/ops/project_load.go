@@ -547,7 +547,7 @@ func (p *Project) CalculateSet(ctx context.Context, ienv *InstallEnv) (*Packages
 }
 
 func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
-	[]string, *PackagesToInstall, error,
+	[]string, *PackagesToInstall, *InstallStats, error,
 ) {
 	var pci PackageCalcInstall
 	pci.common = p.common
@@ -564,23 +564,23 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 
 	toInstall, err := pci.CalculateSet(p.Install)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	err = os.MkdirAll(ienv.Store.Default, 0755)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	var pkgInst PackagesInstall
 	pkgInst.common = p.common
 
-	err = pkgInst.Install(ctx, ienv, toInstall)
+	stats, err := pkgInst.Install(ctx, ienv, toInstall)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, stats, err
 	}
 
-	return requested, toInstall, nil
+	return requested, toInstall, stats, nil
 }
 
 type ExportedCar struct {
