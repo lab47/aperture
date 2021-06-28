@@ -201,10 +201,10 @@ func Analyze(args []string) (*AnalyzedOperation, error) {
 		} else {
 			if len(arg) > 0 && arg[0] != '-' {
 				ao.Inputs = append(ao.Inputs, arg)
+			} else {
+				ao.Common = append(ao.Common, arg)
+				ao.Processed = append(ao.Processed, arg)
 			}
-
-			ao.Common = append(ao.Common, arg)
-			ao.Processed = append(ao.Processed, arg)
 			continue
 		}
 

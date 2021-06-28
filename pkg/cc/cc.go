@@ -540,11 +540,31 @@ func Run(args []string, info, shimPath, cachePath string) error {
 	updated := append([]string{w.arg0}, newArgs...)
 
 	var (
+		env  []string
+		path string
+	)
+
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "PATH=") {
+			updated := e
+
+			if shimPath != "" {
+				updated = strings.ReplaceAll(e, shimPath+":", "")
+			}
+
+			path = updated[5:]
+			env = append(env, updated)
+		} else {
+			env = append(env, e)
+		}
+	}
+
+	var (
 		output    string
 		cacheInfo string
 	)
 
-	cache, err := NewCache(cachePath)
+	cache, err := NewCache(cachePath, path)
 	if err == nil {
 		output, cacheInfo, err = cache.CalculateCacheInfo(context.Background(), L, updated)
 		if err == nil {
@@ -564,26 +584,6 @@ func Run(args []string, info, shimPath, cachePath string) error {
 	L.Info("processing tool", "mode", w.mode, "dir", dir, "mac", w.mac, "arg0", w.arg0, "given", spew.Sdump(w.given), "new-args", spew.Sdump(updated), "config", spew.Sdump(w.bi), "cache-info", cacheInfo)
 
 	t := w.arg0
-
-	var (
-		env  []string
-		path string
-	)
-
-	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "PATH=") {
-			updated := e
-
-			if shimPath != "" {
-				updated = strings.ReplaceAll(e, shimPath+":", "")
-			}
-
-			path = updated[5:]
-			env = append(env, updated)
-		} else {
-			env = append(env, e)
-		}
-	}
 
 	execPath, err := LookPath(t, path)
 	if err != nil {

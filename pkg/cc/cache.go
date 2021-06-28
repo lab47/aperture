@@ -17,10 +17,11 @@ import (
 
 type Cache struct {
 	root string
+	path string
 }
 
-func NewCache(root string) (*Cache, error) {
-	return &Cache{root: root}, nil
+func NewCache(root, path string) (*Cache, error) {
+	return &Cache{root: root, path: path}, nil
 }
 
 var ErrNotCacheable = errors.New("not cacheable")
@@ -38,7 +39,10 @@ func (c *Cache) CalculateCacheInfo(ctx context.Context, L hclog.Logger, args []s
 
 	newArgs := op.PreprocessArgs()
 
-	cmd := exec.CommandContext(ctx, newArgs[0], newArgs[1:]...)
+	execPath, err := LookPath(newArgs[0], c.path)
+
+	cmd := exec.CommandContext(ctx, execPath, newArgs[1:]...)
+	cmd.Args[0] = newArgs[0]
 
 	out, err := cmd.StdoutPipe()
 	if err != nil {

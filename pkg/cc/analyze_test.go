@@ -164,7 +164,3 @@ func TestAnalyze(t *testing.T) {
 		assert.Equal(t, []string{"/tmp/cmake-20210627-3332943-168eidz/cmake-3.20.4/Source/cmConfigureFileCommand.cxx"}, op.Inputs)
 	})
 }
-
-/*
-
- */
