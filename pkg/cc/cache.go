@@ -54,15 +54,24 @@ func (c *Cache) CalculateCacheInfo(ctx context.Context, L hclog.Logger, args []s
 		return "", "", err
 	}
 
-	br := bufio.NewReader(out)
+	br := bufio.NewReaderSize(out, 1024*1024)
 
 	h, _ := blake2b.New256(nil)
 
+outer:
 	for {
 		line, err := br.ReadSlice('\n')
 		if err != nil {
-			out.Close()
-			break
+			switch err {
+			case bufio.ErrBufferFull:
+				// ok, process line as is.
+			case io.EOF:
+				break outer
+			default:
+				L.Error("observed buffering error", "error", err)
+				out.Close()
+				break outer
+			}
 		}
 
 		// Skip any cpp line markers because they contain file names
