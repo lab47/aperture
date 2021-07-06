@@ -21,6 +21,7 @@ type Cache struct {
 }
 
 func NewCache(root, path string) (*Cache, error) {
+	return nil, io.EOF
 	return &Cache{root: root, path: path}, nil
 }
 

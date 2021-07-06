@@ -1,11 +1,14 @@
 package ops
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/morikuni/aec"
 	"lab47.dev/aperture/pkg/config"
 	"lab47.dev/aperture/pkg/data"
+	"lab47.dev/aperture/pkg/humanize"
 )
 
 type CarExport struct {
@@ -63,6 +66,19 @@ func (c *CarExport) Export(pkg *ScriptPackage, path, dest string) (*ExportedCar,
 	if err != nil {
 		return nil, err
 	}
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	sz, unit := humanize.Size(st.Size())
+
+	fmt.Println(
+		aec.Bold.Apply(
+			fmt.Sprintf("📦 .car file saved. %.2f%s to %s", sz, unit, carPath),
+		),
+	)
 
 	exported := &ExportedCar{
 		Package: pkg,

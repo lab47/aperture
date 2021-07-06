@@ -631,7 +631,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 		// If we're doing an export and the script has a post_install, then
 		// we do the prep and export before running post_install, then do the package
 		// prep again.
-		if export || runPost {
+		if export && runPost {
 			// We still need to do this before making the .car file
 			prep()
 

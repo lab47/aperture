@@ -280,6 +280,10 @@ func installF(ctx context.Context, opts struct {
 
 	exportDir := opts.Export
 
+	if exportDir == "" {
+		exportDir = os.Getenv("IRIS_EXPORT_DIR")
+	}
+
 	if opts.Publish && exportDir == "" {
 		dir, err := ioutil.TempDir("", "iris")
 		if err != nil {
@@ -298,6 +302,20 @@ func installF(ctx context.Context, opts struct {
 		}
 
 		ienv.ExportPath = exportDir
+	}
+
+	fmt.Println(
+		aec.Bold.Apply(
+			fmt.Sprintf("✨ Beginning package installation..."),
+		),
+	)
+
+	if exportDir != "" {
+		fmt.Println(
+			aec.Bold.Apply(
+				fmt.Sprintf("📦 Saving .car files to: %s", exportDir),
+			),
+		)
 	}
 
 	requested, toInstall, stats, err := proj.InstallPackages(ctx, ienv)
@@ -384,7 +402,7 @@ func shellF(ctx context.Context, opts struct {
 
 	if opts.Global {
 		if opts.Setup {
-			fmt.Printf("export PATH=%s/bin:%s\n", cfg.GlobalProfilePath(), os.Getenv("PATH"))
+			fmt.Printf("export PATH=%s/bin:%s/bin:%s\n", cfg.GlobalProfilePath(), cfg.StatePath(), os.Getenv("PATH"))
 			return nil
 		}
 
