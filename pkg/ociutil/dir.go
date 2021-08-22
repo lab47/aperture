@@ -162,7 +162,8 @@ top:
 			fmt.Fprintf(h, hdr.Linkname)
 			h.Write([]byte{0})
 
-			err = os.Symlink(filepath.Join(path, hdr.Linkname), path)
+			// All links are normalized to be relative in pack.
+			err = os.Symlink(hdr.Linkname, path)
 			if err != nil {
 				return nil, nil, err
 			}

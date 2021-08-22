@@ -38,6 +38,7 @@ type ScriptCalcSig struct {
 	PostInstall  *exprcore.Function
 	Inputs       []ScriptInput
 	Dependencies []*ScriptPackage
+	ExplicitDeps []*ScriptPackage
 	Instances    []*Instance
 }
 
@@ -130,6 +131,8 @@ func (s *ScriptCalcSig) extract(proto *exprcore.Prototype) error {
 
 	s.PostInstall = post
 
+	depSet := map[string]struct{}{}
+
 	deps, err := lang.ListValue(proto.Attr("dependencies"))
 	if err != nil {
 		return err
@@ -143,6 +146,7 @@ func (s *ScriptCalcSig) extract(proto *exprcore.Prototype) error {
 		var x exprcore.Value
 		for iter.Next(&x) {
 			if script, ok := x.(*ScriptPackage); ok {
+				depSet[script.ID()] = struct{}{}
 				scripts = append(scripts, script)
 			} else {
 				fmt.Printf("unknown return type: %T", x)
@@ -150,6 +154,31 @@ func (s *ScriptCalcSig) extract(proto *exprcore.Prototype) error {
 		}
 
 		s.Dependencies = scripts
+	}
+
+	deps, err = lang.ListValue(proto.Attr("explicit_dependencies"))
+	if err != nil {
+		return err
+	}
+
+	if deps != nil {
+		var scripts []*ScriptPackage
+
+		iter := deps.Iterate()
+		defer iter.Done()
+		var x exprcore.Value
+		for iter.Next(&x) {
+			if script, ok := x.(*ScriptPackage); ok {
+				scripts = append(scripts, script)
+				if _, ok := depSet[script.ID()]; !ok {
+					s.Dependencies = append(s.Dependencies, script)
+				}
+			} else {
+				fmt.Printf("unknown return type: %T", x)
+			}
+		}
+
+		s.ExplicitDeps = scripts
 	}
 
 	return nil
@@ -303,6 +332,12 @@ func (s *ScriptCalcSig) calcSig(
 
 	for _, scr := range s.Dependencies {
 		sd.Dependencies[scr.ID()] = struct{}{}
+	}
+
+	if len(s.ExplicitDeps) > 0 {
+		for _, scr := range s.ExplicitDeps {
+			sd.Dependencies[scr.ID()] = struct{}{}
+		}
 	}
 
 	hb, _ := blake2b.New256(nil)

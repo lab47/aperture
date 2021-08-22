@@ -17,7 +17,8 @@ import (
 )
 
 type Collector struct {
-	dataDir string
+	dataDir  string
+	badRoots []string
 }
 
 func NewCollector(dataDir string) (*Collector, error) {
@@ -68,6 +69,11 @@ func (c *Collector) markInUse() (map[string]struct{}, error) {
 
 			fi, err := os.Stat(path)
 			if err != nil {
+				if os.IsNotExist(err) {
+					c.badRoots = append(c.badRoots, path)
+					continue
+				}
+
 				return nil, err
 			}
 
@@ -124,6 +130,9 @@ func (c *Collector) DiskUsage(dirs []string) (int64, error) {
 			filepath.Join(c.dataDir, "store", d),
 			func(path string, d fs.DirEntry, err error,
 			) error {
+				if err != nil {
+					return nil
+				}
 				fi, err := d.Info()
 				if err == nil {
 					total += fi.Size()
@@ -152,6 +161,11 @@ func (c *Collector) markDir(dir string, seen map[string]struct{}) error {
 				return err
 			}
 
+			// Stat to see that the link is still working
+			if _, err := os.Stat(path); err != nil {
+				return nil
+			}
+
 			if strings.HasPrefix(target, prefix) {
 				tail := target[len(prefix):]
 				idx := strings.IndexByte(tail, filepath.Separator)
@@ -161,9 +175,7 @@ func (c *Collector) markDir(dir string, seen map[string]struct{}) error {
 					id = tail[:idx]
 				}
 
-				seen[id] = struct{}{}
-
-				return c.gatherDeps(tail, seen)
+				return c.gatherDeps(id, seen)
 			}
 		}
 
@@ -174,6 +186,10 @@ func (c *Collector) markDir(dir string, seen map[string]struct{}) error {
 func (c *Collector) gatherDeps(name string, deps map[string]struct{}) error {
 	f, err := os.Open(filepath.Join(c.dataDir, "store", name, ".pkg-info.json"))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+
 		return err
 	}
 
@@ -187,11 +203,11 @@ func (c *Collector) gatherDeps(name string, deps map[string]struct{}) error {
 
 	f.Close()
 
+	deps[name] = struct{}{}
+
 	for _, x := range ii.RuntimeDeps {
 		if _, ok := deps[x]; !ok {
-			deps[x] = struct{}{}
 			err = c.gatherDeps(x, deps)
-
 			if err != nil {
 				return err
 			}
@@ -211,6 +227,10 @@ func (c *Collector) Sweep(ctx context.Context) ([]string, error) {
 }
 
 func (c *Collector) SweepUnmarked(ctx context.Context, marked []string) ([]string, error) {
+	for _, path := range c.badRoots {
+		os.Remove(path)
+	}
+
 	storeDir := filepath.Join(c.dataDir, "store")
 
 	inUse := map[string]struct{}{}

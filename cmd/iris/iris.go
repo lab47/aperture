@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -60,11 +61,33 @@ func main() {
 				setupF,
 			), nil
 		},
+		"add": func() (cli.Command, error) {
+			return cmd.New(
+				"add",
+				"Adds a package to the global profile",
+				addF,
+			), nil
+
+		},
 		"install": func() (cli.Command, error) {
 			return cmd.New(
 				"install",
 				"Install specified package or from project file",
 				installF,
+			), nil
+		},
+		"build": func() (cli.Command, error) {
+			return cmd.New(
+				"install",
+				"Install specified package or from project file",
+				buildF,
+			), nil
+		},
+		"dev": func() (cli.Command, error) {
+			return cmd.New(
+				"dev",
+				"Build a script in dev mode, deleting the data afterwards",
+				devF,
 			), nil
 		},
 		"search": func() (cli.Command, error) {
@@ -115,7 +138,13 @@ func main() {
 				"Debug various things",
 				debugF,
 			), nil
-
+		},
+		"system-info": func() (cli.Command, error) {
+			return cmd.New(
+				"system-info",
+				"Show information about this system",
+				systemInfoF,
+			), nil
 		},
 	}
 
@@ -148,8 +177,9 @@ func setupF(ctx context.Context, opts struct{}) error {
 }
 
 func searchF(ctx context.Context, opts struct {
-	JQ  bool `short:"j" description:"query using a jq-style string"`
-	Pos struct {
+	JQ       bool `short:"j" description:"query using a jq-style string"`
+	NameOnly bool `short:"n" long:"name-only" description:"only print the names of matching packages"`
+	Pos      struct {
 		Query string `positional-arg-name:"query"`
 	} `positional-args:"yes"`
 }) error {
@@ -184,16 +214,394 @@ func searchF(ctx context.Context, opts struct {
 		return err
 	}
 
+	if opts.NameOnly {
+		for _, sp := range results {
+			fmt.Println(sp.Name)
+		}
+
+		return nil
+	}
+
 	for _, sp := range results {
 		fmt.Printf("%s: %s\n", sp.Name, sp.Description)
 		fmt.Printf("  version: %s\n", sp.Version)
 		fmt.Printf("  dependencies: %s\n", strings.Join(sp.Dependencies, ", "))
+
+		if sp.Vendor != "" {
+			fmt.Printf("  vendor: %s\n", sp.Vendor)
+		}
 
 		if sp.URL != "" {
 			fmt.Printf("  url: %s\n", sp.URL)
 		}
 		fmt.Println()
 	}
+
+	return nil
+}
+
+func forceRemove(path string, info fs.FileInfo) error {
+	err := os.Remove(path)
+	if err == nil {
+		return nil
+	}
+
+	err = os.Chmod(path, info.Mode().Perm()|0200)
+	if err != nil {
+		return err
+	}
+
+	return os.Remove(path)
+}
+
+func forceRemoveDir(path string) error {
+	var dirs []string
+	err := filepath.Walk(path, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			err = os.Chmod(path, info.Mode().Perm()|0200)
+			if err != nil {
+				return err
+			}
+
+			dirs = append(dirs, path)
+			return nil
+		}
+
+		return forceRemove(path, info)
+	})
+
+	if err != nil {
+		return err
+	}
+
+	for i := len(dirs) - 1; i >= 0; i-- {
+		err = os.Remove(dirs[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func buildF(ctx context.Context, opts struct {
+	Explain bool   `short:"E" long:"explain" description:"explain what will be installed"`
+	Export  string `long:"export" description:"write .car files to the given directory"`
+	Publish bool   `short:"P" long:"publish" description:"publish exported car files to repo"`
+	Global  bool   `short:"G" long:"global" description:"install into the user's global profile"`
+	Build   bool   `short:"B" long:"build-only" description:"build packages only, don't manage any profiles"`
+	Clean   bool   `short:"C" long:"clean" description:"temporarily setup a clean store first"`
+
+	Pos struct {
+		Package string `positional-arg-name:"name"`
+	} `positional-args:"yes"`
+}) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	if opts.Clean {
+		curStore := filepath.Join(cfg.DataDir, fmt.Sprintf("store-%d", os.Getpid()))
+		defer func() {
+			prev := curStore + ".prev"
+			err = os.Rename(cfg.StorePath(), prev)
+			if err != nil {
+				fmt.Printf("error renaming store to prev: %s\n", err)
+			}
+			err = os.Rename(curStore, cfg.StorePath())
+			if err != nil {
+				fmt.Printf("error renaming saved to store: %s\n", err)
+			}
+
+			err = forceRemoveDir(prev)
+			if err != nil {
+				fmt.Printf("error removing temp store: %s\n", err)
+			}
+		}()
+		os.Rename(cfg.StorePath(), curStore)
+
+		fmt.Println(
+			aec.Bold.Apply(
+				fmt.Sprintf("📦 Saved current store: %s", curStore),
+			),
+		)
+	}
+
+	buildRoot := cfg.BuildPath()
+
+	err = os.MkdirAll(buildRoot, 0755)
+	if err != nil {
+		return err
+	}
+
+	stateDir := cfg.StatePath()
+
+	err = os.MkdirAll(stateDir, 0755)
+	if err != nil {
+		return err
+	}
+
+	exportDir := opts.Export
+
+	if exportDir == "" {
+		exportDir = os.Getenv("IRIS_EXPORT_DIR")
+	}
+
+	ienv := &ops.InstallEnv{
+		Store:      cfg.Store(),
+		BuildDir:   buildRoot,
+		StateDir:   stateDir,
+		Config:     cfg,
+		ExportPath: exportDir,
+	}
+
+	var cl ops.ProjectLoad
+
+	proj, err := cl.LoadSet(ctx, cfg, opts.Pos.Package)
+	if err != nil {
+		return err
+	}
+
+	err = proj.Explain(ctx, ienv)
+	if err != nil {
+		return err
+	}
+
+	if opts.Explain {
+		return nil
+	}
+
+	var showLock bool
+	cleanup, err := lockfile.Take(ctx, ".iris-lock", func() {
+		if !showLock {
+			fmt.Printf("Lock detected, waiting...\n")
+			showLock = true
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	defer cleanup()
+
+	if opts.Publish && exportDir == "" {
+		dir, err := ioutil.TempDir("", "iris")
+		if err != nil {
+			return err
+		}
+
+		exportDir = dir
+
+		defer os.RemoveAll(dir)
+	}
+
+	if exportDir != "" {
+		err := os.MkdirAll(exportDir, 0755)
+		if err != nil {
+			return err
+		}
+
+		ienv.ExportPath = exportDir
+	}
+
+	fmt.Println(
+		aec.Bold.Apply(
+			fmt.Sprintf("✨ Beginning package building..."),
+		),
+	)
+
+	if exportDir != "" {
+		fmt.Println(
+			aec.Bold.Apply(
+				fmt.Sprintf("📦 Saving .car files to: %s", exportDir),
+			),
+		)
+	}
+
+	_, pti, stats, err := proj.InstallPackages(ctx, ienv)
+	if err != nil {
+		return err
+	}
+
+	if exportDir != "" && opts.Publish {
+		extra, err := proj.FindCachedBuildOnlyDeps(pti, exportDir)
+		if err != nil {
+			return err
+		}
+
+		toExport := append(extra, ienv.ExportedCars...)
+
+		return publishCars(ctx, cfg, toExport)
+	}
+
+	fmt.Println(
+		aec.Bold.Apply(
+			fmt.Sprintf("🔥 Finished building! %d new packages, %d existing packages (elapse: %s)",
+				stats.Installed, stats.Existing, stats.Elapsed.Round(time.Second).String(),
+			),
+		),
+	)
+
+	return nil
+}
+
+func addF(ctx context.Context, opts struct {
+	Explain bool `short:"E" long:"explain" description:"explain what will be installed"`
+	Pos     struct {
+		Package string `positional-arg-name:"name"`
+	} `positional-args:"yes"`
+}) error {
+	if opts.Pos.Package == "" {
+		return fmt.Errorf("package name required")
+	}
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	buildRoot := cfg.BuildPath()
+
+	err = os.MkdirAll(buildRoot, 0755)
+	if err != nil {
+		return err
+	}
+
+	stateDir := cfg.StatePath()
+
+	err = os.MkdirAll(stateDir, 0755)
+	if err != nil {
+		return err
+	}
+
+	pkgPath := cfg.GlobalPackagesPath()
+
+	var gp data.GlobalPackages
+
+	f, err := os.Open(pkgPath)
+	if err == nil {
+		defer f.Close()
+
+		err = json.NewDecoder(f).Decode(&gp)
+		if err != nil {
+			return errors.Wrapf(err, "attempting to decode global packages list")
+		}
+
+		f.Close()
+	}
+
+	ienv := &ops.InstallEnv{
+		Store:    cfg.Store(),
+		BuildDir: buildRoot,
+		StateDir: stateDir,
+		Config:   cfg,
+	}
+
+	var cl ops.ProjectLoad
+
+	profilePath := cfg.GlobalProfilePath()
+
+	proj, err := cl.Single(ctx, cfg, opts.Pos.Package)
+	if err != nil {
+		return err
+	}
+
+	if opts.Explain {
+		err := proj.Explain(ctx, ienv)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	var showLock bool
+	cleanup, err := lockfile.Take(ctx, ".iris-lock", func() {
+		if !showLock {
+			fmt.Printf("Lock detected, waiting...\n")
+			showLock = true
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	defer cleanup()
+
+	fmt.Println(
+		aec.Bold.Apply(
+			fmt.Sprintf("✨ Beginning package installation..."),
+		),
+	)
+
+	requested, toInstall, stats, err := proj.InstallPackages(ctx, ienv)
+	if err != nil {
+		return err
+	}
+
+	prof, err := profile.OpenProfile(cfg, profilePath)
+	if err != nil {
+		return err
+	}
+
+	for _, pkg := range gp.Packages {
+		id := pkg.Id
+
+		path, err := ienv.Store.Locate(id)
+		if err != nil {
+			fmt.Printf("! Missing package from global list, pruning: %s\n", id)
+		} else {
+			err = prof.Link(id, path)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, id := range requested {
+		gp.Packages = append(gp.Packages, &data.GlobalPackage{
+			Name: toInstall.Scripts[id].Name(),
+			Id:   id,
+		})
+
+		err = prof.Link(id, toInstall.InstallDirs[id])
+		if err != nil {
+			return err
+		}
+	}
+
+	err = prof.Commit()
+	if err != nil {
+		return err
+	}
+
+	f, err = os.Create(cfg.GlobalPackagesPath())
+	if err != nil {
+		return errors.Wrapf(err, "attempting to update global package list")
+	}
+
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+
+	err = enc.Encode(gp)
+	if err != nil {
+		return errors.Wrapf(err, "attempting to update global package list")
+	}
+
+	fmt.Println(
+		aec.Bold.Apply(
+			fmt.Sprintf("🔥 Finished installing! %d new packages, %d existing packages (elapse: %s)",
+				stats.Installed, stats.Existing, stats.Elapsed.Round(time.Second).String(),
+			),
+		),
+	)
 
 	return nil
 }
@@ -720,6 +1128,25 @@ func publishCarF(ctx context.Context, opts struct {
 	return publishCars(ctx, cfg, cars)
 }
 
+func systemInfoF(ctx context.Context, opts struct{}) error {
+	constraints := config.SystemConstraints()
+
+	var keys []string
+
+	for k := range constraints {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	fmt.Printf("System contraints:\n")
+	for _, k := range keys {
+		fmt.Printf("  %s: %s\n", k, constraints[k])
+	}
+
+	return nil
+}
+
 func envF(ctx context.Context, opts struct {
 	Global bool `short:"G" long:"global-profile" description:"output location of global profile"`
 }) error {
@@ -818,6 +1245,89 @@ func gcF(ctx context.Context, opts struct {
 	fmt.Printf("  Files Removed: %d\n", res.EntriesRemoved)
 
 	return nil
+}
+
+func devF(ctx context.Context, opts struct {
+	Pos struct {
+		Script string `positional-arg-name:"script"`
+	} `positional-args:"yes"`
+	DryRun bool `long:"dry-run" description:"explain operations but don't do them"`
+	Trace  bool `long:"trace" description:"log in trace mode"`
+}) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	level := hclog.Debug
+
+	if opts.Trace {
+		level = hclog.Trace
+	}
+
+	L := hclog.New(&hclog.LoggerOptions{
+		Name:  "iris-debug",
+		Level: level,
+	})
+
+	var cl ops.ProjectLoad
+	cl.SetLogger(L)
+
+	name := opts.Pos.Script
+
+	proj, err := cl.Single(ctx, cfg, name)
+	if err != nil {
+		return err
+	}
+
+	root, err := filepath.Abs(fmt.Sprintf("./%s-build", strings.ReplaceAll(name, "/", "-")))
+	if err != nil {
+		return err
+	}
+
+	ienv := &ops.InstallEnv{
+		Store:       cfg.Store(),
+		BuildDir:    filepath.Join(root, "build"),
+		StateDir:    filepath.Join(root, "state"),
+		RetainBuild: true,
+		StartShell:  true,
+	}
+
+	err = proj.Explain(ctx, ienv)
+	if err != nil {
+		return err
+	}
+
+	if opts.DryRun {
+		return nil
+	}
+
+	err = os.MkdirAll(ienv.BuildDir, 0755)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(ienv.Store.Default, 0755)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(ienv.StateDir, 0755)
+	if err != nil {
+		return err
+	}
+
+	requested, _, _, err := proj.InstallPackages(ctx, ienv)
+	if err != nil {
+		return err
+	}
+
+	path, err := ienv.Store.Locate(requested[0])
+	if err != nil {
+		return err
+	}
+
+	return forceRemoveDir(path)
 }
 
 func debugF(ctx context.Context, opts struct {

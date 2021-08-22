@@ -75,28 +75,39 @@ func (c *CarPack) Pack(cinfo *data.CarInfo, dir string, w io.Writer) error {
 		}
 
 		err = func() error {
-			var link string
+			var old string
+
+			// We read /x/a/b and it's a symlink. We readlink it and get back
+			// /x/c/d. So file = "/x/a/b" and old = "/x/c/d".
+			// We figure out relative base by looking at the dir of file, so "/x/a".
+			// since old is absolutely, we calculate the relative path of it with
+			// respect to the base. In other words if you are in "/x/a", how do you
+			// get to "/x/c/d". The result will be "../c/d". That relative value
+			// we store as the link target.
+			// If old is already relative, say "../c/d", we first normalize it back
+			// to absolutely by joining it with base, so we do join("/x/a", "../c/d"),
+			// which will return "/x/c/d".
 
 			if fi.Mode()&os.ModeSymlink != 0 {
-				link, err = os.Readlink(file)
+				old, err = os.Readlink(file)
 				if err != nil {
 					return err
 				}
 
-				abs := link
+				// Normalize all links to be relative to the target
+				base := filepath.Dir(file)
 
-				if !filepath.IsAbs(abs) {
-					abs = filepath.Join(filepath.Dir(file), link)
-				} else {
-					link = link[len(dir)+1:]
+				if !filepath.IsAbs(old) {
+					old = filepath.Join(base, old)
 				}
 
-				// if !strings.HasPrefix(abs, dir) {
-				// return fmt.Errorf("link points outside of root dir: %s", abs)
-				// }
+				rel, err := filepath.Rel(base, old)
+				if err == nil {
+					old = rel
+				}
 			}
 
-			hdr, err := tar.FileInfoHeader(fi, link)
+			hdr, err := tar.FileInfoHeader(fi, old)
 			if err != nil {
 				return err
 			}
@@ -111,7 +122,7 @@ func (c *CarPack) Pack(cinfo *data.CarInfo, dir string, w io.Writer) error {
 			hdr.Name = file[len(dir)+1:]
 			hdr.Format = tar.FormatPAX
 
-			if link == "" {
+			if old == "" {
 				fmt.Fprintf(dh, hdr.Name)
 				dh.Write([]byte{0})
 			} else {
@@ -126,7 +137,7 @@ func (c *CarPack) Pack(cinfo *data.CarInfo, dir string, w io.Writer) error {
 				return fmt.Errorf("error writing file header: %s: %w", hdr.Name, err)
 			}
 
-			if link != "" {
+			if old != "" {
 				return nil
 			}
 

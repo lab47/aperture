@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -235,6 +236,45 @@ func (c *ProjectLoad) Single(ctx context.Context, cfg *config.Config, name strin
 	return &proj, nil
 }
 
+func (c *ProjectLoad) LoadSet(ctx context.Context, cfg *config.Config, path string) (*Project, error) {
+	c.cfg = cfg
+	c.store = cfg.Store()
+
+	c.constraints = config.SystemConstraints()
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	defer f.Close()
+
+	r := bufio.NewReader(f)
+
+	var proj Project
+	proj.common = c.common
+	proj.Constraints = c.constraints
+	proj.Cellar = homebrew.DefaultCellar()
+
+	for {
+		line, _ := r.ReadString('\n')
+		if line == "" {
+			break
+		}
+
+		line = strings.TrimSpace(line)
+
+		pkg, err := c.loadScript(ctx, "", line)
+		if err != nil {
+			return nil, errors.Wrapf(err, "attempting to load '%s'", line)
+		}
+
+		proj.Install = append(proj.Install, pkg)
+	}
+
+	return &proj, nil
+}
+
 func (l *ProjectLoad) sourceFn(thread *exprcore.Thread, b *exprcore.Builtin, args exprcore.Tuple, kwargs []exprcore.Tuple) (exprcore.Value, error) {
 	// Clearly any previously used path
 	l.path = nil
@@ -429,7 +469,7 @@ func (l *ProjectLoad) loadScript(ctx context.Context, ns, name string) (*ScriptP
 
 	data, err := sl.Load(name, WithConstraints(l.constraints))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "while loading from project.xcr")
 	}
 
 	return data, nil
@@ -481,6 +521,10 @@ func (p *Project) Resolve() (*homebrew.Resolution, error) {
 func (p *Project) Explain(ctx context.Context, ienv *InstallEnv) error {
 	var pci PackageCalcInstall
 	pci.common = p.common
+
+	if ienv.ExportPath != "" {
+		pci.CarCache = []string{ienv.ExportPath}
+	}
 
 	var cl CarLookup
 	pci.carLookup = &cl
@@ -553,6 +597,10 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 	pci.common = p.common
 	pci.Store = ienv.Store
 
+	if ienv.ExportPath != "" {
+		pci.CarCache = []string{ienv.ExportPath}
+	}
+
 	var cl CarLookup
 	pci.carLookup = &cl
 
@@ -575,6 +623,10 @@ func (p *Project) InstallPackages(ctx context.Context, ienv *InstallEnv) (
 	var pkgInst PackagesInstall
 	pkgInst.common = p.common
 
+	for _, pkg := range toInstall.InstallOrder {
+		fmt.Println(pkg)
+	}
+
 	stats, err := pkgInst.Install(ctx, ienv, toInstall)
 	if err != nil {
 		return nil, nil, stats, err
@@ -588,6 +640,100 @@ type ExportedCar struct {
 	Info    *data.CarInfo
 	Path    string
 	Sum     []byte
+}
+
+func stringSet(b []string) map[string]struct{} {
+	set := make(map[string]struct{})
+
+	for _, s := range b {
+		set[s] = struct{}{}
+	}
+
+	return set
+}
+
+func pkgSet(a []*ScriptPackage) map[string]*ScriptPackage {
+	s := make(map[string]*ScriptPackage)
+	for _, pkg := range a {
+		s[pkg.ID()] = pkg
+	}
+	return s
+}
+
+func subtractDeps(a []*ScriptPackage, b []string) []*ScriptPackage {
+	var diff []*ScriptPackage
+
+	bSet := stringSet(b)
+
+	for _, pkg := range a {
+		if _, ok := bSet[pkg.ID()]; !ok {
+			diff = append(diff, pkg)
+		}
+	}
+
+	return diff
+}
+
+func (p *Project) FindCachedBuildOnlyDeps(pti *PackagesToInstall, dir string) ([]*ExportedCar, error) {
+	buildDeps := map[string]*ScriptPackage{}
+	toProcess := []*ScriptPackage{}
+
+	for _, id := range pti.InstallOrder {
+		pkg := pti.Scripts[id]
+
+		boDeps := subtractDeps(pkg.Dependencies(), pti.Dependencies[id])
+
+		for _, pkg := range boDeps {
+			toProcess = append(toProcess, pkg)
+			buildDeps[pkg.ID()] = pkg
+		}
+	}
+
+	for len(toProcess) > 0 {
+		pkg := toProcess[0]
+		toProcess = toProcess[1:]
+
+		for _, dep := range pkg.Dependencies() {
+			if _, ok := buildDeps[dep.ID()]; !ok {
+				toProcess = append(toProcess, dep)
+				buildDeps[dep.ID()] = dep
+			}
+		}
+	}
+
+	for _, id := range pti.InstallOrder {
+		delete(buildDeps, id)
+	}
+
+	var exported []*ExportedCar
+
+	for _, dep := range buildDeps {
+		path := filepath.Join(dir, dep.ID()+".car")
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+
+		var cu CarUnpack
+
+		err = cu.Install(f, MetadataOnly)
+
+		f.Close()
+
+		if err != nil {
+			return nil, err
+		}
+
+		var ec ExportedCar
+		ec.Path = path
+		ec.Sum = cu.Sum
+		ec.Info = &cu.Info
+		ec.Package = dep
+
+		exported = append(exported, &ec)
+	}
+
+	return exported, nil
 }
 
 func (p *Project) Export(ctx context.Context, cfg *config.Config, dest string) ([]*ExportedCar, error) {

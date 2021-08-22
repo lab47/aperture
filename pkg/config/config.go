@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -168,6 +169,7 @@ func ensureDirs(cfg *Config) (*Config, error) {
 		cfg.ProfilesPath,
 		filepath.Join(cfg.ProfilesPath, cfg.Profile),
 		filepath.Join(cfg.RootsPath()),
+		cfg.StorePath(),
 	}
 
 	for _, dir := range dirs {
@@ -320,6 +322,10 @@ func (c *Config) GlobalProfilePath() string {
 	return filepath.Join(c.ProfilesPath, c.Profile)
 }
 
+func (c *Config) GlobalPackagesPath() string {
+	return filepath.Join(c.configDir, "global.json")
+}
+
 type PathPart struct {
 	Name string
 	Path string
@@ -465,13 +471,15 @@ func SystemConstraints() map[string]string {
 	}
 
 	if osName == "darwin" {
-		// Strip off the minor version
-		dot := strings.LastIndexByte(osVersion, '.')
-		if dot != -1 {
-			osVersion = osVersion[:dot]
-		}
+		parts := strings.Split(osVersion, ".")
 
-		constraints["darwin/version"] = osVersion
+		major, err := strconv.Atoi(parts[0])
+		if err == nil && major > 10 {
+			constraints["darwin/version"] = parts[0]
+		} else {
+			// Strip off the minor version
+			constraints["darwin/version"] = fmt.Sprintf("%s.%s", parts[0], parts[1])
+		}
 	}
 
 	return constraints

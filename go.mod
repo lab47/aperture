@@ -7,14 +7,12 @@ require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/docker/docker v1.4.2-0.20191219165747-a9416c67da9f // indirect
 	github.com/go-git/go-git/v5 v5.3.0
-	github.com/golang/protobuf v1.4.3 // indirect
 	github.com/google/go-containerregistry v0.5.1
 	github.com/hashicorp/go-getter v1.5.3
 	github.com/hashicorp/go-hclog v0.16.0
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/itchyny/gojq v0.12.4
 	github.com/jessevdk/go-flags v1.5.0
-	github.com/jmespath/go-jmespath v0.0.0-20160803190731-bd40a432e4c7 // indirect
 	github.com/klauspost/compress v1.13.1
 	github.com/lab47/exprcore v0.0.0-20210226035030-9b644201f87c
 	github.com/mattn/go-runewidth v0.0.13 // indirect
@@ -29,11 +27,10 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.7.0
 	github.com/ulikunitz/xz v0.5.10 // indirect
-	golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b
+	golang.org/x/crypto v0.0.0-20210506145944-38f3c27a63bf
 	golang.org/x/mod v0.4.2
 	golang.org/x/sys v0.0.0-20210601080250-7ecdf8ef093b
 	golang.org/x/text v0.3.6 // indirect
-	golang.org/x/tools v0.0.0-20210106214847-113979e3529a // indirect
 	google.golang.org/genproto v0.0.0-20201110150050-8816d57aaa9a // indirect
 	google.golang.org/grpc v1.33.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect

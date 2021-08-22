@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -37,8 +38,10 @@ type CarData struct {
 	name string
 	r    CarReader
 
-	info *data.CarInfo
-	img  v1.Image
+	info      *data.CarInfo
+	localPath string
+	img       v1.Image
+	sum       []byte
 }
 
 func (r *CarData) Open() (io.ReadCloser, error) {
@@ -50,6 +53,19 @@ func (r *CarData) Info() (*data.CarInfo, error) {
 }
 
 func (r *CarData) Unpack(ctx context.Context, dir string) error {
+	if r.localPath != "" {
+		var cu CarUnpack
+
+		f, err := os.Open(r.localPath)
+		if err != nil {
+			return err
+		}
+
+		defer f.Close()
+
+		return cu.Install(f, dir)
+	}
+
 	cInfo, err := ociutil.WriteDir(r.img, dir)
 	if err != nil {
 		return err

@@ -10,6 +10,7 @@ type RepoEntry struct {
 
 	Dependencies []string          `json:"dependencies"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+	Vendor       string            `json:"vendor,omitempty"`
 }
 
 type RepoIndex struct {

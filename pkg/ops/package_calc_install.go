@@ -20,6 +20,8 @@ type PackageCalcInstall struct {
 
 	Store *config.Store
 
+	CarCache []string
+
 	carLookup *CarLookup
 }
 
@@ -40,26 +42,38 @@ type InstallCar struct {
 
 func (i *InstallCar) Install(ctx context.Context, ienv *InstallEnv) error {
 	fmt.Printf("Installing car for %s...\n", i.data.info.ID)
-	path, err := ienv.Store.Locate(i.data.info.ID)
-	if err != nil {
-		return err
-	}
+	path := ienv.Store.ExpectedPath(i.data.info.ID)
 
-	err = i.data.Unpack(ctx, path)
+	err := i.data.Unpack(ctx, path)
 	if err != nil {
 		return err
 	}
 
 	if i.pkg.cs.PostInstall != nil {
+		fmt.Printf("Running post-install for %s...\n", i.data.info.ID)
+
 		var mod InstallEnv = *ienv
 
 		mod.OnlyPostInstall = true
+
+		// We want to be sure that ScriptInstall doesn't think we want
+		// to perform an export.
+		mod.ExportPath = ""
 
 		var si ScriptInstall
 		si.common = i.common
 
 		si.pkg = i.pkg
 		return si.Install(ctx, &mod)
+	}
+
+	if i.data.localPath != "" {
+		ienv.ExportedCars = append(ienv.ExportedCars, &ExportedCar{
+			Package: i.pkg,
+			Info:    i.data.info,
+			Path:    i.data.localPath,
+			Sum:     i.data.sum,
+		})
 	}
 
 	return nil
@@ -168,6 +182,8 @@ func (p *PackageCalcInstall) calcSet(
 	for _, pkg := range pkgs {
 		set[pkg.ID()] = struct{}{}
 
+		full = append(full, pkg)
+
 		deps, err := p.runtimeDeps(pkg)
 		if err != nil {
 			return err
@@ -219,7 +235,7 @@ func (p *PackageCalcInstall) calcSet(
 
 	carInfo := make(map[string]lookupData)
 
-	requests := make(chan *ScriptPackage, len(set))
+	requests := make(chan *ScriptPackage, len(full))
 
 	var wg sync.WaitGroup
 
@@ -230,18 +246,32 @@ func (p *PackageCalcInstall) calcSet(
 			defer wg.Done()
 
 			for pkg := range requests {
-				carData, err := p.carLookup.Lookup(pkg)
-				if err != nil {
-					return
+				var (
+					carData *CarData
+					err     error
+				)
+
+				if len(p.CarCache) > 0 {
+					carData, err = p.checkCarCache(pkg.ID())
+					if err != nil {
+						p.L().Debug("error attempting to check car cache", "error", err)
+					}
+				}
+
+				if carData == nil && p.carLookup != nil {
+					carData, err = p.carLookup.Lookup(pkg)
+					if err != nil {
+						p.L().Debug("error attempting to lookup car", "error", err)
+					}
 				}
 
 				if carData == nil {
-					return
+					continue
 				}
 
 				info, err := carData.Info()
 				if err != nil {
-					return
+					continue
 				}
 
 				mu.Lock()
@@ -256,17 +286,13 @@ func (p *PackageCalcInstall) calcSet(
 	}
 
 	for _, pkg := range full {
-		ip, err := p.isInstalled(pkg.ID())
+		_, err := p.isInstalled(pkg.ID())
 		if err != nil {
 			if errors.Is(err, config.ErrNoEntry) {
-				continue
+				// ok
+			} else {
+				return err
 			}
-
-			return err
-		}
-
-		if ip != "" {
-			continue
 		}
 
 		requests <- pkg
@@ -350,6 +376,34 @@ func (p *PackageCalcInstall) calcSet(
 	return nil
 }
 
+func (p *PackageCalcInstall) checkCarCache(id string) (*CarData, error) {
+	for _, root := range p.CarCache {
+		path := filepath.Join(root, id+".car")
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+
+		defer f.Close()
+
+		var cu CarUnpack
+
+		err = cu.Install(f, MetadataOnly)
+		if err != nil {
+			continue
+		}
+
+		return &CarData{
+			name:      id,
+			info:      &cu.Info,
+			localPath: path,
+			sum:       cu.Sum,
+		}, nil
+	}
+
+	return nil, nil
+}
+
 func (p *PackageCalcInstall) consider(
 	pkg *ScriptPackage,
 	pti *PackagesToInstall,
@@ -389,6 +443,13 @@ func (p *PackageCalcInstall) consider(
 			carData, err = p.carLookup.Lookup(pkg)
 			if err != nil {
 				p.L().Debug("error attempting to lookup car", "error", err, "id", pkg.ID())
+			}
+		}
+
+		if carData == nil && len(p.CarCache) > 0 {
+			carData, err = p.checkCarCache(pkg.ID())
+			if err != nil {
+				p.L().Debug("error attempting to check car cache", "error", err)
 			}
 		}
 

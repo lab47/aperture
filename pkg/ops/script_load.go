@@ -82,6 +82,8 @@ type ScriptPackage struct {
 	Instance *Instance
 
 	repoConfig repo.Repo
+
+	vendor string
 }
 
 func (s *ScriptPackage) Name() string {
@@ -103,6 +105,12 @@ func (s *ScriptPackage) Metadata() map[string]string {
 // URL is the homepage for the project, not where to download it.
 func (s *ScriptPackage) URL() string {
 	return s.cs.URL
+}
+
+// Returns the vendor (if any) that the script was loaded from
+// in the repo.
+func (s *ScriptPackage) Vendor() string {
+	return s.vendor
 }
 
 // String returns the string representation of the value.
@@ -338,6 +346,7 @@ func (s *ScriptLoad) Search(query string, opts ...Option) ([]*ScriptPackage, err
 			constraints: lc.constraints,
 			prototype:   ppkg,
 			repoConfig:  data.RepoConfig(),
+			vendor:      data.Vendor(),
 		}
 
 		s.loaded[cacheKey] = sp
@@ -487,11 +496,21 @@ func (s *ScriptLoad) Load(name string, opts ...Option) (*ScriptPackage, error) {
 
 	if cr != nil {
 		thread.Import = func(thread *exprcore.Thread, namespace, pkg string, args *exprcore.Dict) (exprcore.Value, error) {
-			return s.importUnderRepo(thread, lctx, namespace, pkg, args)
+			val, err := s.importUnderRepo(thread, lctx, namespace, pkg, args)
+			if err != nil {
+				return nil, errors.Wrapf(err, "resolving from '%s'", name)
+			}
+
+			return val, nil
 		}
 	} else {
 		thread.Import = func(thread *exprcore.Thread, namespace, pkg string, args *exprcore.Dict) (exprcore.Value, error) {
-			return s.importPkg(thread, lctx, namespace, pkg, args)
+			val, err := s.importPkg(thread, lctx, namespace, pkg, args)
+			if err != nil {
+				return nil, errors.Wrapf(err, "resolving from '%s'", name)
+			}
+
+			return val, nil
 		}
 	}
 
@@ -517,6 +536,7 @@ func (s *ScriptLoad) Load(name string, opts ...Option) (*ScriptPackage, error) {
 		constraints: lc.constraints,
 		prototype:   ppkg,
 		repoConfig:  data.RepoConfig(),
+		vendor:      data.Vendor(),
 	}
 
 	s.loaded[cacheKey] = sp

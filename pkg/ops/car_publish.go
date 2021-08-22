@@ -76,8 +76,10 @@ func (c *CarPublish) getInfo(path string) (*data.CarInfo, []byte, error) {
 	return &info, sig, nil
 }
 
+var tagReplacements = strings.NewReplacer("@", "-", "+", "_")
+
 func OCICarTag(id string) string {
-	return strings.ReplaceAll(id, "@", "-")
+	return tagReplacements.Replace(id)
 }
 
 func (c *CarPublish) PublishCar(ctx context.Context, path, repo string) error {

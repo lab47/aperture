@@ -45,13 +45,15 @@ type ScriptData interface {
 	Asset(name string) ([]byte, error)
 	Repo() string
 	RepoConfig() repo.Repo
+	Vendor() string
 }
 
 type dirScriptData struct {
 	data []byte
 
-	repo string
-	dir  string
+	repo   string
+	dir    string
+	vendor string
 
 	cfg repo.Repo
 }
@@ -68,11 +70,15 @@ func (s *dirScriptData) RepoConfig() repo.Repo {
 	return s.cfg
 }
 
+func (s *dirScriptData) Vendor() string {
+	return s.vendor
+}
+
 func (s *dirScriptData) Asset(name string) ([]byte, error) {
 	return ioutil.ReadFile(filepath.Join(s.dir, name))
 }
 
-func (s *ScriptLookup) lookupInDir(root, dir, name string) (ScriptData, error) {
+func (s *ScriptLookup) lookupInDir(root, dir, vendor, name string) (ScriptData, error) {
 	var short string
 
 	if len(name) > 2 {
@@ -123,15 +129,21 @@ func (s *ScriptLookup) lookupInDir(root, dir, name string) (ScriptData, error) {
 				}
 			}
 
-			return &dirScriptData{data: data, dir: x.dir, repo: rname, cfg: cfg}, nil
+			return &dirScriptData{
+				data:   data,
+				dir:    x.dir,
+				repo:   rname,
+				cfg:    cfg,
+				vendor: vendor,
+			}, nil
 		}
 	}
 
-	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s' (2)", name)
 }
 
 func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
-	data, err := s.lookupInDir(dir, dir, name)
+	data, err := s.lookupInDir(dir, dir, "", name)
 	if err == nil {
 		return data, nil
 	}
@@ -147,7 +159,7 @@ func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
 	if fi, err := os.Stat(vendor); err == nil && fi.IsDir() {
 		vendored, err := os.ReadDir(vendor)
 		if err != nil {
-			return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
+			return nil, errors.Wrapf(ErrNotFound, "looking for '%s' (3)", name)
 		}
 
 		for _, fi := range vendored {
@@ -155,17 +167,17 @@ func (s *ScriptLookup) LoadDir(dir, name string) (ScriptData, error) {
 				continue
 			}
 
-			data, err := s.lookupInDir(dir, filepath.Join(vendor, fi.Name()), name)
+			data, err := s.lookupInDir(dir, filepath.Join(vendor, fi.Name()), fi.Name(), name)
 			if err == nil {
 				return data, nil
 			}
 		}
 	}
 
-	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s' (4)", name)
 }
 
-func (s *ScriptLookup) walkInDir(root, dir string, fn func(string, ScriptData) error) error {
+func (s *ScriptLookup) walkInDir(root, dir, vendor string, fn func(string, ScriptData) error) error {
 	repo, err := repo.Open(root)
 	if err != nil {
 		return err
@@ -189,7 +201,12 @@ func (s *ScriptLookup) walkInDir(root, dir string, fn func(string, ScriptData) e
 				return err
 			}
 
-			sd := &dirScriptData{data: data, dir: dir, cfg: repo}
+			sd := &dirScriptData{
+				data:   data,
+				dir:    dir,
+				cfg:    repo,
+				vendor: vendor,
+			}
 
 			name := ent.Name()[:len(ent.Name())-len(Extension)]
 
@@ -221,7 +238,12 @@ func (s *ScriptLookup) walkInDir(root, dir string, fn func(string, ScriptData) e
 			return err
 		}
 
-		sd := &dirScriptData{data: data, dir: dir, cfg: repo}
+		sd := &dirScriptData{
+			data:   data,
+			dir:    dir,
+			cfg:    repo,
+			vendor: vendor,
+		}
 
 		base := filepath.Base(path)
 
@@ -237,7 +259,7 @@ func (s *ScriptLookup) walkInDir(root, dir string, fn func(string, ScriptData) e
 }
 
 func (s *ScriptLookup) WalkDir(dir string, fn func(string, ScriptData) error) error {
-	err := s.walkInDir(dir, dir, fn)
+	err := s.walkInDir(dir, dir, "", fn)
 	if err != nil {
 		return err
 	}
@@ -261,7 +283,7 @@ func (s *ScriptLookup) WalkDir(dir string, fn func(string, ScriptData) error) er
 				continue
 			}
 
-			err := s.walkInDir(dir, filepath.Join(vendor, fi.Name()), fn)
+			err := s.walkInDir(dir, filepath.Join(vendor, fi.Name()), fi.Name(), fn)
 			if err != nil {
 				return err
 			}
@@ -294,7 +316,7 @@ func (s *ScriptLookup) LoadFile(path string) (ScriptData, error) {
 		return &dirScriptData{data: data, dir: dir, repo: repo}, nil
 	}
 
-	return nil, errors.Wrapf(ErrNotFound, "looking for path '%s'", path)
+	return nil, errors.Wrapf(ErrNotFound, "looking for path '%s' (1)", path)
 }
 
 type ghScriptData struct {
@@ -316,6 +338,8 @@ func (s *ghScriptData) Repo() string {
 func (s *ghScriptData) RepoConfig() repo.Repo {
 	return nil
 }
+
+func (s *ghScriptData) Vendor() string { return "" }
 
 func (s *ghScriptData) Asset(name string) ([]byte, error) {
 	url := fmt.Sprintf("%s/%s", s.base, name)
@@ -472,34 +496,46 @@ func (s *ScriptLookup) Load(name string) (ScriptData, error) {
 		return r, nil
 	}
 
-	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s' (5)", name)
 }
 
 func (s *ScriptLookup) loadGeneric(p, name string) (ScriptData, error) {
 	switch {
 	case strings.HasPrefix(name, "./"):
 		r, err := s.LoadFile(name)
+		if err != nil {
+			return nil, err
+		}
 		if err == nil {
 			return r, nil
 		}
 	case strings.HasPrefix(p, "./"):
 		r, err := s.LoadDir(p, name)
+		if err != nil {
+			return nil, err
+		}
 		if err == nil {
 			return r, nil
 		}
 	case strings.HasPrefix(p, "/"):
 		r, err := s.LoadDir(p, name)
+		if err != nil {
+			return nil, err
+		}
 		if err == nil {
 			return r, nil
 		}
 	case strings.HasPrefix(p, "github.com/"):
 		r, err := s.loadGithub(s.client, p, name)
+		if err != nil {
+			return nil, err
+		}
 		if err == nil {
 			return r, nil
 		}
 	}
 
-	return nil, errors.Wrapf(ErrNotFound, "looking for '%s'", name)
+	return nil, errors.Wrapf(ErrNotFound, "looking for '%s' (6)", name)
 }
 
 func (s *ScriptLookup) loadVanity(client httpDo, repo, name string) (ScriptData, error) {

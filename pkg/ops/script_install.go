@@ -300,10 +300,12 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 			return err
 		}
 
-		os.RemoveAll(targetDir)
-		err := os.Mkdir(targetDir, 0755)
-		if err != nil {
-			return err
+		if !ienv.OnlyPostInstall {
+			os.RemoveAll(targetDir)
+			err := os.Mkdir(targetDir, 0755)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -403,9 +405,18 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 	var scd ScriptCalcDeps
 	scd.store = ienv.Store
 
-	buildDeps, err := scd.BuildDeps(i.pkg)
-	if err != nil {
-		return err
+	var buildDeps []*ScriptPackage
+
+	if ienv.OnlyPostInstall {
+		buildDeps, err = scd.RuntimeDeps(i.pkg)
+		if err != nil {
+			return err
+		}
+	} else {
+		buildDeps, err = scd.BuildDeps(i.pkg)
+		if err != nil {
+			return err
+		}
 	}
 
 	buildSet := make(map[string]struct{})
@@ -533,7 +544,7 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 
 		_, err := exprcore.Call(&thread, hook, args, nil)
 		if err != nil {
-			return err
+			return track(err)
 		}
 	}
 
@@ -617,12 +628,14 @@ func (i *ScriptInstall) Install(ctx context.Context, ienv *InstallEnv) error {
 				log.Error("Error adjusting library names", "error", perr)
 			}
 
-			var pwi PackageWriteInfo
-			pwi.store = ienv.Store
+			if !ienv.OnlyPostInstall {
+				var pwi PackageWriteInfo
+				pwi.store = ienv.Store
 
-			_, perr = pwi.Write(i.pkg)
-			if perr != nil {
-				log.Error("error writing package info", "error", perr)
+				_, perr = pwi.Write(i.pkg)
+				if perr != nil {
+					log.Error("error writing package info", "error", perr)
+				}
 			}
 		}
 

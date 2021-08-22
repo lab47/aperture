@@ -84,7 +84,7 @@ func (p *PackagesInstall) Install(
 			if !ienv.RetainBuild {
 				os.RemoveAll(storeDir)
 			}
-			return nil, err
+			return nil, errors.Wrapf(err, "error installing %s", id)
 		}
 
 		p.Installed = append(p.Installed, id)

@@ -41,6 +41,7 @@ func (r *RepoWriteIndex) Write() error {
 			Description:  sp.Description(),
 			Dependencies: sp.DependencyNames(),
 			Metadata:     sp.Metadata(),
+			Vendor:       sp.Vendor(),
 		})
 	}
 
